@@ -1,7 +1,11 @@
 import Foundation
 
 /// Strumenti esterni: prima quelli dentro l'app, poi Homebrew.
-let toolDirs: [String] = { (Bundle.main.resourcePath.map { [$0] } ?? []) + ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"] }()
+let toolDirs: [String] = {
+    // Contents/Resources dell'app, trovata dal percorso reale dell'eseguibile (funziona anche chiamandolo tramite un collegamento)
+    let res = Bundle.main.executableURL?.resolvingSymlinksInPath().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Resources").path
+    return (res.map { [$0] } ?? []) + ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
+}()
 func tool(_ n: String) -> String? { toolDirs.map { $0 + "/" + n }.first { FileManager.default.isExecutableFile(atPath: $0) } }
 
 struct Out { var out = Data(); var err = ""; var status: Int32 = -1; var text: String { String(decoding: out, as: UTF8.self) } }
@@ -55,5 +59,7 @@ extension String {
         guard let re = try? NSRegularExpression(pattern: pattern, options: options), let m = re.firstMatch(in: self, range: NSRange(startIndex..., in: self)) else { return nil }
         return (0..<m.numberOfRanges).map { i in Range(m.range(at: i), in: self).map { String(self[$0]) } ?? "" }
     }
+    /// Il testo che ha fatto scattare un'espressione (per mostrarlo all'utente).
+    func found(_ pattern: String) -> String? { range(of: pattern, options: [.regularExpression, .caseInsensitive]).map { String(self[$0]) } }
     func has(_ pattern: String) -> Bool { range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil }
 }

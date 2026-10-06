@@ -4,7 +4,7 @@ Uso: python3 tests/test_moviepreflight.py   (usa dist/moviepreflight; serve ffmp
 import os, subprocess, sys, tempfile, shutil
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); BIN = os.path.join(ROOT, "dist", "moviepreflight")
 T = tempfile.mkdtemp(prefix="moviepreflight-test-"); ok = bad = 0
-def ff(*a): subprocess.run(["ffmpeg", "-y", "-loglevel", "error", *a], check=True)
+def ff(*a): subprocess.run(["ffmpeg", "-y", "-nostdin", "-loglevel", "error", *a], check=True, stdin=subprocess.DEVNULL)
 def check(c, msg):
     global ok, bad
     if c: ok += 1; print("  ok  ", msg)
@@ -104,6 +104,15 @@ try:
     f = two("fix4.mkv"); rc, o = fix(f, "--drop-audio", "0", "--drop-audio", "1"); check(rc != 0 and len(tracks(f, "audio")) == 2, "non si eliminano tutte le tracce audio")
     rc, o = fix(f, "--audio-default", "5"); check(rc != 0, "traccia predefinita inesistente rifiutata")
     rc, o = fix(f, "--trim-start", "100000"); check(rc != 0 and not os.path.exists(f.replace(".mkv", ".orig_backup.mkv")), "taglio impossibile: nessuna modifica")
+    print("== dialoghi 5.1")
+    f51 = os.path.join(T, "surround.mkv")
+    ff("-f", "lavfi", "-i", f"testsrc2=s=640x360:r=25:d={D}", "-f", "lavfi", "-i", f"sine=f=300:d={D}", "-filter_complex", "[1]pan=5.1|FL=2.0*c0|FR=2.0*c0|FC=0.8*c0|LFE=0*c0|BL=0*c0|BR=0*c0[a]",
+       "-map", "0:v", "-map", "[a]", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "ac3", "-metadata:s:a:0", "language=ita", f51)   # fronte più forte del centro di ~8 dB (niente join: ffmpeg a volte si blocca)
+    o = analyze(f51); check("Musica ed effetti coprono i dialoghi" in o, "musica sopra i dialoghi in un 5.1 rilevata")
+    rc, o = fix(f51, "--boost-center", "0"); import re
+    m = re.search(r"prima: (\d+)% .* dopo: (\d+)%", o)
+    check(rc == 0 and m is not None and int(m.group(1)) > 80 and int(m.group(2)) < int(m.group(1)) - 50, f"canale centrale alzato: musica sopra i dialoghi {m.group(1) if m else '?'}% → {m.group(2) if m else '?'}%")
+    rc, o = fix(os.path.join(T, "pulito.mkv"), "--boost-center", "0"); check(rc != 0, "alzare il centro su una traccia non 5.1 è rifiutato")
 finally:
     shutil.rmtree(T, ignore_errors=True)
 print(f"\n{ok} controlli ok, {bad} falliti"); sys.exit(1 if bad else 0)

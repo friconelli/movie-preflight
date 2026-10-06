@@ -1,7 +1,7 @@
 import Foundation
 
 private let stdFps: [Double] = [23.976, 24, 25, 29.97, 30, 48, 50, 59.94, 60]
-let adPattern = #"www\.|https?://|\b[a-z0-9-]+\.(com|net|org|info|tv|to|me|ws|cc|io|ru|mx|pw|se)\b|\byify\b|\byts\b|rarbg|torrent|\bettv\b|eztv|1337x|opensubtitles|subscene|addic7ed|podnapisi|\bsub(titles?)? (by|from)\b|sottotitoli (di|by|a cura)|traduzione( di| a cura)?:|tradotto da|translated by|sync(ed|hronized)?( (and|&) (corrected|edited))? by|ripped by|encoded by|downloaded from|scaricato da|italiansubs|itasa|please rate|advertise|your ad here|vip member|\bfgt\b|\bntb\b|\bpsa\b|megusta|\btigole\b|\bqxr\b|galaxytv|\bamiable\b|\bpublichd\b|\bsparks\b|\bgeckos\b"#
+let adPattern = #"www\.|https?://|\b[a-z0-9-]{4,}\.(com|net|org|info|tv|to|me|ws|cc|io|ru|mx|pw|se)\b|\byify\b|\byts\b|rarbg|torrent|\bettv\b|eztv|1337x|opensubtitles|subscene|addic7ed|podnapisi|\bsub(titles?)? (by|from)\b|sottotitoli (di|by|a cura)|traduzione( di| a cura)?:|tradotto da|translated by|sync(ed|hronized)?( (and|&) (corrected|edited))? by|ripped by|encoded by|downloaded from|scaricato da|italiansubs|itasa|please rate|advertise|your ad here|vip member|\bfgt\b|\bntb\b|\bpsa\b|megusta|\btigole\b|\bqxr\b|galaxytv|\bamiable\b|\bpublichd\b|\bsparks\b|\bgeckos\b"#
 
 func checkContainer(_ pr: Probe, _ url: URL, _ c: Collector) {
     let ext = url.pathExtension.lowercased(); let fname = (pr.fmt["format_name"] as? String) ?? ""; let ft = tags(["tags": pr.fmt["tags"] as Any])

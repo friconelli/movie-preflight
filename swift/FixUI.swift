@@ -28,7 +28,8 @@ struct FixSheet: View {
                         Picker("", selection: Binding(get: { plan.audioDefault ?? -1 }, set: { plan.audioDefault = $0 < 0 ? nil : $0 })) { Text("Invariata").tag(-1); ForEach(report.audioTracks) { Text(label($0)).tag($0.ord) } }.labelsHidden() }
                     ForEach(report.audioTracks) { t in trackRow(t, kind: "a") {
                         Toggle("Livella la dinamica (musica più bassa rispetto ai dialoghi)", isOn: Binding(get: { plan.normalize.contains(t.ord) }, set: { if $0 { plan.normalize.insert(t.ord) } else { plan.normalize.remove(t.ord) } })).disabled(plan.dropAudio.contains(t.ord) || t.channels > 6)
-                        Toggle("Elimina questa traccia", isOn: Binding(get: { plan.dropAudio.contains(t.ord) }, set: { if $0 { plan.dropAudio.insert(t.ord); plan.normalize.remove(t.ord) } else { plan.dropAudio.remove(t.ord) } })).disabled(report.audioTracks.count < 2)
+                        if t.channels == 6 { Toggle("Alza i dialoghi (canale centrale +4 dB)", isOn: Binding(get: { plan.boostCenter.contains(t.ord) }, set: { if $0 { plan.boostCenter.insert(t.ord) } else { plan.boostCenter.remove(t.ord) } })).disabled(plan.dropAudio.contains(t.ord)) }
+                        Toggle("Elimina questa traccia", isOn: Binding(get: { plan.dropAudio.contains(t.ord) }, set: { if $0 { plan.dropAudio.insert(t.ord); plan.normalize.remove(t.ord); plan.boostCenter.remove(t.ord) } else { plan.dropAudio.remove(t.ord) } })).disabled(report.audioTracks.count < 2)
                     } } } }
                 if !report.subTracks.isEmpty { group("Sottotitoli") {
                     HStack { Text("Predefiniti").frame(width: 150, alignment: .leading)

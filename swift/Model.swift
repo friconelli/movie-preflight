@@ -5,7 +5,7 @@ enum Sev: Int, Comparable { case ok, info, warn, error
     var label: String { ["OK", "Nota", "Attenzione", "Problema"][rawValue] }
 }
 /// Correzione suggerita da una segnalazione (i numeri sono posizioni all'interno del proprio tipo: audio 0, 1…, sottotitoli 0, 1…).
-enum FixHint { case defaultAudio(Int), defaultSub(Int?), setLang(String, Int), cleanSub(Int), dropSub(Int), trimStart(Double), trimEnd(Double), normalize(Int) }
+enum FixHint { case defaultAudio(Int), defaultSub(Int?), setLang(String, Int), cleanSub(Int), dropSub(Int), trimStart(Double), trimEnd(Double), normalize(Int), boostCenter(Int) }
 struct Finding: Identifiable { let id = UUID(); var sev: Sev; var area: String; var title: String; var detail: String; var time: Double?; var thumb: URL?; var fixes: [FixHint] = [] }
 struct TrackInfo: Identifiable { var id: Int { ord }; var ord: Int; var lang: String; var title: String; var codec: String; var channels: Int; var isDefault: Bool; var forced: Bool; var image: Bool; var bitrate: Double }
 struct KV: Identifiable { let id = UUID(); var k: String; var v: String }

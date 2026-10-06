@@ -109,7 +109,7 @@ func scanCredits(_ pr: Probe, _ path: String, _ tmp: URL, _ c: Collector, progre
         if h.0 - lastT < 6 { continue }; lastT = h.0
         let dest = outDir.appendingPathComponent(UUID().uuidString + ".jpg"); try? FileManager.default.copyItem(at: h.2, to: dest)
         let where_ = h.0 < 60 ? "nei primi secondi" : "verso la fine"
-        c.add(.error, "Video", "Scritta pubblicitaria o crediti del torrent nell'immagine (\(where_))", "Testo rilevato: «\(String(h.1.prefix(140)))»", time: h.0, thumb: dest, fix: [h.0 < 60 ? .trimStart(startEnd) : .trimEnd(endBegin)])
+        c.add(.error, "Video", "Scritta pubblicitaria o crediti del torrent nell'immagine (\(where_))", "Testo rilevato: «\(String(h.1.prefix(140)))» — ha fatto scattare: «\(h.1.found(adPattern) ?? "")»", time: h.0, thumb: dest, fix: [h.0 < 60 ? .trimStart(startEnd) : .trimEnd(endBegin)])
     }
 }
 
@@ -142,7 +142,7 @@ func scanSubtitles(_ pr: Probe, _ path: String, _ tmp: URL, _ c: Collector) {
         c.rows("Sottotitoli \(item.offset + 1)", order: 30 + item.offset, [("Battute lette", "\(cues.count)"), ("Prima battuta", hms(cues[0].s)), ("Ultima battuta", hms(cues.last!.e))])
         // pubblicità e crediti
         var ads = 0
-        for q in cues where q.t.has(adPattern) { ads += 1; if ads <= 4 { c.add(.error, area, "Crediti o pubblicità nei sottotitoli — \(n)", "«\(String(q.t.replacingOccurrences(of: "\n", with: " ").prefix(120)))»", time: q.s, fix: [.cleanSub(item.offset)]) } }
+        for q in cues where q.t.has(adPattern) { ads += 1; if ads <= 4 { c.add(.error, area, "Crediti o pubblicità nei sottotitoli — \(n)", "«\(String(q.t.replacingOccurrences(of: "\n", with: " ").prefix(120)))» — ha fatto scattare: «\(q.t.found(adPattern) ?? "")»", time: q.s, fix: [.cleanSub(item.offset)]) } }
         if ads > 4 { c.add(.error, area, "Altre \(ads - 4) battute con crediti o pubblicità — \(n)", "", fix: [.cleanSub(item.offset)]) }
         // lingua
         if let code = langNames[lang(s)]?.nl, !forced, cues.count >= 20 {
