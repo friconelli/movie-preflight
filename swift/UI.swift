@@ -128,7 +128,7 @@ struct JobDetail: View {
                     }
                 }
             }.padding(20) }
-            .onAppear { if ProcessInfo.processInfo.environment["COLLAUDO_SHEET"] != nil { var p = FixPlan(); r.findings.forEach { $0.fixes.forEach { p.merge($0) } }; sheetPlan = p } }   // solo per le prove a vista
+            .onAppear { if ProcessInfo.processInfo.environment["MOVIEPREFLIGHT_SHEET"] != nil { var p = FixPlan(); r.findings.forEach { $0.fixes.forEach { p.merge($0) } }; sheetPlan = p } }   // solo per le prove a vista
             .sheet(isPresented: Binding(get: { sheetPlan != nil }, set: { if !$0 { sheetPlan = nil } })) { FixSheet(job: job, report: r, plan: sheetPlan ?? FixPlan(), store: store).onChange(of: job.fixProgress == nil) { _ in } }
             .onChange(of: job.fixProgress != nil) { running in if running { /* resta aperta per mostrare l'avanzamento */ } else { sheetPlan = nil } }
         } else {
@@ -140,7 +140,7 @@ struct JobDetail: View {
         }
     }
     func save(_ r: Report) {
-        let p = NSSavePanel(); p.nameFieldStringValue = r.file.deletingPathExtension().lastPathComponent + " — collaudo.txt"; p.allowedContentTypes = [.plainText]
+        let p = NSSavePanel(); p.nameFieldStringValue = r.file.deletingPathExtension().lastPathComponent + " — preflight.txt"; p.allowedContentTypes = [.plainText]
         if p.runModal() == .OK, let u = p.url { try? r.text.write(to: u, atomically: true, encoding: .utf8) }
     }
 }

@@ -17,7 +17,7 @@ struct Report {
     var verdict: String { switch worst { case .error: return "Problemi da risolvere"; case .warn: return "Da controllare"; default: return "Pronto per la sala" } }
     var counts: (err: Int, warn: Int, info: Int) { (findings.filter { $0.sev == .error }.count, findings.filter { $0.sev == .warn }.count, findings.filter { $0.sev == .info }.count) }
     var text: String {
-        var s = "COLLAUDO — \(file.lastPathComponent)\nEsito: \(verdict)  (\(counts.err) problemi, \(counts.warn) attenzioni, \(counts.info) note)\n\n"
+        var s = "MOVIE PREFLIGHT — \(file.lastPathComponent)\nEsito: \(verdict)  (\(counts.err) problemi, \(counts.warn) attenzioni, \(counts.info) note)\n\n"
         for f in findings.sorted(by: { $0.sev > $1.sev }) where f.sev > .ok {
             s += "[\(f.sev.label.uppercased())] \(f.area): \(f.title)" + (f.time.map { " (a \(hms($0)))" } ?? "") + "\n" + (f.detail.isEmpty ? "" : "    \(f.detail.replacingOccurrences(of: "\n", with: "\n    "))\n")
         }

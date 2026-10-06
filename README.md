@@ -1,4 +1,4 @@
-# Collaudo (nome provvisorio)
+# Movie Preflight
 
 App Mac (Swift/SwiftUI, come Dolly) che controlla un film prima della proiezione: si trascina un mp4/mkv/avi (o più file, o una cartella) e restituisce dati tecnici e segnalazioni su immagine, audio e sottotitoli.
 
@@ -16,12 +16,12 @@ Dalle segnalazioni (pulsante «Correggi…») o dal pulsante in alto si apre una
 - **tagliare** l'inizio o la fine (crediti del torrent nell'immagine) senza ricodificare, sui fotogrammi chiave;
 - **livellare la dinamica** di una traccia audio (`dynaudnorm` + `alimiter`, AC3), con misura prima/dopo.
 
-Sicurezza: solo etichette in un mkv → modifica sul posto con mkvpropedit, senza riscrivere il film. Ogni altra correzione scrive un file temporaneo, lo **verifica** (numero di tracce, durata, buchi nell'audio rispetto all'originale) e solo allora sostituisce; l'originale resta come `<nome>.orig_backup.<ext>` e «Annulla la correzione» lo rimette. Da riga di comando: `dist/collaudo --fix film.mkv --audio-default 1 --sub-default none --lang s1=fra --clean-sub 0 --trim-start 4 --normalize 0` (numeri da 0).
+Sicurezza: solo etichette in un mkv → modifica sul posto con mkvpropedit, senza riscrivere il film. Ogni altra correzione scrive un file temporaneo, lo **verifica** (numero di tracce, durata, buchi nell'audio rispetto all'originale) e solo allora sostituisce; l'originale resta come `<nome>.orig_backup.<ext>` e «Annulla la correzione» lo rimette. Da riga di comando: `dist/moviepreflight --fix film.mkv --audio-default 1 --sub-default none --lang s1=fra --clean-sub 0 --trim-start 4 --normalize 0` (numeri da 0).
 
 ## Uso
-    ./build.sh                       # dist/Collaudo.app (+ dist/collaudo per la riga di comando)
-    dist/collaudo --analyze film.mkv # rapporto testuale
-    python3 tests/test_collaudo.py   # 35 controlli su film sintetici con difetti noti
+    ./build.sh                       # dist/Movie Preflight.app (+ dist/moviepreflight per la riga di comando)
+    dist/moviepreflight --analyze film.mkv # rapporto testuale
+    python3 tests/test_moviepreflight.py   # 35 controlli su film sintetici con difetti noti
 
 Serve ffmpeg/ffprobe (Homebrew in /opt/homebrew/bin, oppure dentro Contents/Resources). Non modifica mai i file analizzati.
 

@@ -91,8 +91,8 @@ func applyFix(_ url: URL, _ plan: FixPlan, progress: @escaping (Double, String) 
     if let free = (try? dir.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?.volumeAvailableCapacityForImportantUsage, Double(free) < pr.size * 1.05 + 1e8 {
         return FixResult(ok: false, message: "Spazio insufficiente: servono almeno \(fmtBytes(pr.size * 1.05)) liberi.")
     }
-    let tmp = dir.appendingPathComponent(".\(base).collaudo-tmp.\(ext)"); try? FileManager.default.removeItem(at: tmp)
-    let work = FileManager.default.temporaryDirectory.appendingPathComponent("collaudo-fix-" + UUID().uuidString); try? FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+    let tmp = dir.appendingPathComponent(".\(base).moviepreflight-tmp.\(ext)"); try? FileManager.default.removeItem(at: tmp)
+    let work = FileManager.default.temporaryDirectory.appendingPathComponent("moviepreflight-fix-" + UUID().uuidString); try? FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: work); try? FileManager.default.removeItem(at: tmp) }
 
     // taglio: sempre sui keyframe, così nessun fotogramma resta a metà e non serve ricodificare

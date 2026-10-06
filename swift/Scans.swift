@@ -102,7 +102,7 @@ func scanCredits(_ pr: Probe, _ path: String, _ tmp: URL, _ c: Collector, progre
         lock.lock(); done += 1; let f = Double(done) / Double(max(frames.count, 1)); lock.unlock(); progress(0.4 + 0.6 * f)
     }
     // una segnalazione per ogni gruppo di fotogrammi vicini; la miniatura va copiata prima che la cartella temporanea sparisca
-    let outDir = FileManager.default.temporaryDirectory.appendingPathComponent("collaudo-thumbs"); try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+    let outDir = FileManager.default.temporaryDirectory.appendingPathComponent("moviepreflight-thumbs"); try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
     var lastT = -100.0
     let startEnd = (hits.filter { $0.0 < 60 }.map(\.0).max() ?? 0) + 2.5, endBegin = (hits.filter { $0.0 >= 60 }.map(\.0).min() ?? d) - 3.5   // margine: i fotogrammi sono campionati ogni 1,5 / 3 s
     for h in hits.sorted(by: { $0.0 < $1.0 }) {

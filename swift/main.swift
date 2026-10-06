@@ -18,4 +18,4 @@ if let f = arg("--fix").first {
     let r = applyFix(URL(fileURLWithPath: f), p) { v, s in FileHandle.standardError.write(Data(String(format: "\r%3.0f%% %@                    ", v * 100, s).utf8)) }
     FileHandle.standardError.write(Data("\n".utf8)); print((r.ok ? "OK: " : "ERRORE: ") + r.message); r.lines.forEach { print("  " + $0) }; exit(r.ok ? 0 : 1)
 }
-CollaudoApp.main()
+MoviePreflightApp.main()

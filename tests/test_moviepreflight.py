@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Prova Collaudo su film sintetici con difetti noti: ogni controllo deve scattare quando deve e non quando non deve.
-Uso: python3 tests/test_collaudo.py   (usa dist/collaudo; serve ffmpeg)"""
+"""Prova Movie Preflight su film sintetici con difetti noti: ogni controllo deve scattare quando deve e non quando non deve.
+Uso: python3 tests/test_moviepreflight.py   (usa dist/moviepreflight; serve ffmpeg)"""
 import os, subprocess, sys, tempfile, shutil
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); BIN = os.path.join(ROOT, "dist", "collaudo")
-T = tempfile.mkdtemp(prefix="collaudo-test-"); ok = bad = 0
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); BIN = os.path.join(ROOT, "dist", "moviepreflight")
+T = tempfile.mkdtemp(prefix="moviepreflight-test-"); ok = bad = 0
 def ff(*a): subprocess.run(["ffmpeg", "-y", "-loglevel", "error", *a], check=True)
 def check(c, msg):
     global ok, bad

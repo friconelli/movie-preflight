@@ -1,8 +1,8 @@
 #!/bin/zsh
-# Compila Collaudo (nome provvisorio) → dist/Collaudo.app. Uso: ./build.sh
+# Compila Movie Preflight → dist/Movie Preflight.app. Uso: ./build.sh
 # Usa ffmpeg/ffprobe di Homebrew (/opt/homebrew/bin) oppure quelli messi in Contents/Resources.
 set -e; cd "$(dirname "$0")"
-NAME="Collaudo"; EXE=collaudo; BUNDLE_ID=app.collaudo.Collaudo; VERSION=${VERSION:-0.1.0}
+NAME="Movie Preflight"; EXE=moviepreflight; BUNDLE_ID=app.moviepreflight.MoviePreflight; VERSION=${VERSION:-0.1.0}
 SDK=/Library/Developer/CommandLineTools/SDKs/MacOSX15.2.sdk
 A="dist/$NAME.app"; rm -rf "$A"; mkdir -p "$A/Contents/MacOS" "$A/Contents/Resources"
 swiftc -O -sdk $SDK -target arm64-apple-macos13.0 swift/*.swift -o "$A/Contents/MacOS/$EXE"
@@ -15,4 +15,4 @@ cat > "$A/Contents/Info.plist" <<P
 <key>CFBundleTypeExtensions</key><array><string>mp4</string><string>mkv</string><string>avi</string><string>m4v</string><string>mov</string></array></dict></array></dict></plist>
 P
 codesign --force -s - -r='designated => identifier "'$BUNDLE_ID'"' "$A"
-ln -sf "$NAME.app/Contents/MacOS/$EXE" dist/collaudo
+ln -sf "$NAME.app/Contents/MacOS/$EXE" dist/moviepreflight
