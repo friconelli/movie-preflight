@@ -66,7 +66,7 @@ struct JobDetail: View {
                     ForEach(r.tech.sorted { $0.order < $1.order }) { s in VStack(alignment: .leading, spacing: 3) { Text(s.title).font(.subheadline.weight(.semibold)).padding(.top, 4)
                         ForEach(s.rows) { row in HStack(alignment: .top) { Text(row.k).foregroundStyle(.secondary).frame(width: 190, alignment: .leading); Text(row.v).textSelection(.enabled) }.font(.callout) } } } }.padding(.top, 6) }.font(.headline)
             }.padding(24).frame(maxWidth: 760, alignment: .leading) }
-            .sheet(isPresented: $showCompare) { CompareView(job: job) }
+            .sheet(isPresented: $showCompare) { CompareView(pair: ComparePair(before: job.origURL ?? job.url, beforeReport: job.origReport ?? job.report!, after: job.url, afterReport: job.report!, lines: job.fixLog)) }
             .sheet(isPresented: Binding(get: { sheetPlan != nil }, set: { if !$0 { sheetPlan = nil } })) { FixSheet(job: job, report: r, plan: sheetPlan ?? FixPlan(), store: store) }
             .onChange(of: job.fixProgress != nil) { running in if !running { sheetPlan = nil } }
             .onChange(of: job.hasCorrected) { c in if c && ProcessInfo.processInfo.environment["MOVIEPREFLIGHT_OPENCOMPARE"] != nil { showCompare = true } }

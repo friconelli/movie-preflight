@@ -11,7 +11,7 @@ final class Job: ObservableObject, Identifiable {
     init(_ u: URL) { url = u }
 }
 final class Store: ObservableObject {
-    @Published var jobs: [Job] = []; @Published var selection: UUID?; @Published var modelProgress: Double?
+    @Published var jobs: [Job] = []; @Published var selection: UUID?; @Published var modelProgress: Double?; @Published var comparePair: ComparePair?; @Published var compareBusy = false
     private let q = DispatchQueue(label: "analisi")   // un film alla volta: le analisi usano già tutti i core
     static let exts: Set<String> = ["mp4", "mkv", "avi", "m4v", "mov"]
     func add(_ urls: [URL]) {
@@ -95,6 +95,29 @@ final class Store: ObservableObject {
         try? FileManager.default.trashItem(at: j.url, resultingItemURL: nil)
         j.url = o; j.report = j.origReport; j.origURL = nil; j.origReport = nil; j.fixResult = nil; j.fixLog = []
     }
+    /// Confronta due film qualsiasi (per esempio un originale e la sua versione corretta, anche di versioni precedenti dell'app): li analizza se serve e apre il confronto.
+    func compareFiles() {
+        let p = NSOpenPanel(); p.allowsMultipleSelection = true; p.canChooseDirectories = false; p.message = "Scegli i due film da confrontare (l'originale e quello corretto)"
+        guard p.runModal() == .OK else { return }
+        guard p.urls.count == 2 else { let a = NSAlert(); a.messageText = "Servono due film"; a.informativeText = "Seleziona esattamente due file (⌘-clic per sceglierne due)."; a.runModal(); return }
+        compare(p.urls)
+    }
+    func compare(_ urls: [URL]) {
+        // «prima» è quello chiamato .orig_backup, altrimenti il più vecchio
+        func date(_ u: URL) -> Date { (try? u.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast }
+        var pair = urls
+        if pair[1].lastPathComponent.contains(".orig_backup") && !pair[0].lastPathComponent.contains(".orig_backup") { pair.reverse() }
+        else if !pair[0].lastPathComponent.contains(".orig_backup") && date(pair[1]) < date(pair[0]) { pair.reverse() }
+        compareBusy = true
+        q.async { [weak self] in
+            func rep(_ u: URL) -> Report {
+                var existing: Report?; DispatchQueue.main.sync { existing = self?.jobs.first { $0.url == u }?.report }
+                return existing ?? analyze(u)
+            }
+            let a = rep(pair[0]), b = rep(pair[1])
+            DispatchQueue.main.async { self?.compareBusy = false; self?.comparePair = ComparePair(before: pair[0], beforeReport: a, after: pair[1], afterReport: b) }
+        }
+    }
     /// Consenso alle ricerche online (solo il titolo ricavato dal nome del file viene inviato a Wikidata e Wikipedia).
     func askOnline(force: Bool = false) {
         if ProcessInfo.processInfo.environment["MOVIEPREFLIGHT_NOPROMPT"] != nil { onlineLookups = ProcessInfo.processInfo.environment["MOVIEPREFLIGHT_ONLINE"] != nil; return }   // solo per le prove a vista
@@ -103,6 +126,11 @@ final class Store: ObservableObject {
         a.informativeText = "Movie Preflight può trovare titolo, anno, regista, durata, locandina e descrizione su Wikidata e Wikipedia (servizi liberi, nessuna chiave). Per farlo invia soltanto il titolo e l'anno ricavati dal nome del file: i film non vengono mai inviati. Servono per confrontare la durata, suggerire il nome del file e mostrare la scheda del film."
         a.addButton(withTitle: UserDefaults.standard.bool(forKey: "metaConsent") ? "Lascia attivo" : "Consenti"); a.addButton(withTitle: UserDefaults.standard.bool(forKey: "metaConsent") ? "Disattiva" : "Non ora")
         let yes = a.runModal() == .alertFirstButtonReturn; UserDefaults.standard.set(yes, forKey: "metaConsent"); onlineLookups = yes
+    }
+    init() {
+        onlineLookups = UserDefaults.standard.bool(forKey: "metaConsent")   // il consenso dato in precedenza vale anche ai prossimi avvii
+        let e = ProcessInfo.processInfo.environment   // solo per le prove a vista
+        if let a = e["MOVIEPREFLIGHT_COMPARE_A"], let b = e["MOVIEPREFLIGHT_COMPARE_B"] { DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.compare([URL(fileURLWithPath: a), URL(fileURLWithPath: b)]) } }
     }
     func open() { let p = NSOpenPanel(); p.allowsMultipleSelection = true; p.canChooseDirectories = true; p.message = "Scegli uno o più film"; if p.runModal() == .OK { add(p.urls) } }
 }
@@ -124,11 +152,14 @@ struct ContentView: View {
             } }
         }
         .frame(minWidth: 900, minHeight: 600)
+        .sheet(item: $store.comparePair) { pair in CompareView(pair: pair, swap: { store.comparePair = nil; DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { store.comparePair = pair.swapped } }) }
         .onDrop(of: [.fileURL], isTargeted: $hover) { ps in
             for p in ps { _ = p.loadObject(ofClass: URL.self) { u, _ in if let u = u { DispatchQueue.main.async { store.add([u]) } } } }; return true }
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.accentColor, lineWidth: hover ? 3 : 0).padding(6).allowsHitTesting(false))
         .toolbar {
             if let p = store.modelProgress { ToolbarItem { HStack { Text("Scarico il modello vocale…").font(.caption).foregroundStyle(.secondary); ProgressView(value: p).frame(width: 110) } } }
+            if store.compareBusy { ToolbarItem { HStack { Text("Analizzo i due film…").font(.caption).foregroundStyle(.secondary); ProgressView().controlSize(.small) } } }
+            ToolbarItem { Button { store.compareFiles() } label: { Label("Confronta due film", systemImage: "rectangle.split.2x1") } }
             ToolbarItem { Button { store.open() } label: { Label("Aggiungi film", systemImage: "plus") } }
         }
     }

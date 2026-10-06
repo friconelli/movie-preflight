@@ -42,15 +42,19 @@ enum CompareMedia {
     }
 }
 
+/// Una coppia di film da confrontare (prima / dopo) con i loro rapporti.
+struct ComparePair: Identifiable { let id = UUID(); var before: URL; var beforeReport: Report; var after: URL; var afterReport: Report; var lines: [String] = []
+    var swapped: ComparePair { ComparePair(before: after, beforeReport: afterReport, after: before, afterReport: beforeReport, lines: []) } }
+
 final class CompareModel: ObservableObject {
     let before: URL, after: URL; let beforeReport: Report, afterReport: Report
     @Published var time: Double; @Published var stillA: NSImage?; @Published var stillB: NSImage?; @Published var cueA = ""; @Published var cueB = ""; @Published var busy = false
     @Published var audioTrackAfter = 0; @Published var subTrackAfter = 0; @Published var playing: String?
     private var wavA: URL?, wavB: URL?; private var pA: AVAudioPlayer?, pB: AVAudioPlayer?
     let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("moviepreflight-compare-" + UUID().uuidString)
-    init(job: Job) {
-        before = job.origURL ?? job.url; after = job.url; beforeReport = job.origReport ?? job.report!; afterReport = job.report!
-        let first = (job.origReport?.findings.compactMap(\.time).first) ?? afterReport.duration * 0.35
+    init(pair: ComparePair) {
+        before = pair.before; after = pair.after; beforeReport = pair.beforeReport; afterReport = pair.afterReport
+        let first = beforeReport.findings.filter { $0.sev >= .warn }.compactMap(\.time).first ?? afterReport.duration * 0.35
         time = min(max(0, first), max(0, afterReport.duration - 30))
         audioTrackAfter = afterReport.audioTracks.firstIndex { $0.isDefault } ?? 0; subTrackAfter = afterReport.subTracks.firstIndex { !$0.forced && !$0.image } ?? 0
         try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
@@ -89,14 +93,15 @@ final class CompareModel: ObservableObject {
 }
 
 struct CompareView: View {
-    @StateObject var m: CompareModel; @Environment(\.dismiss) private var dismiss; let fixLines: [String]
-    init(job: Job) { _m = StateObject(wrappedValue: CompareModel(job: job)); fixLines = job.fixLog }
+    @StateObject var m: CompareModel; @Environment(\.dismiss) private var dismiss; let fixLines: [String]; var swap: (() -> Void)?
+    init(pair: ComparePair, swap: (() -> Void)? = nil) { _m = StateObject(wrappedValue: CompareModel(pair: pair)); fixLines = pair.lines; self.swap = swap }
     var body: some View {
         let d = diffReports(m.beforeReport, m.afterReport)
         VStack(spacing: 0) {
             HStack { VStack(alignment: .leading, spacing: 2) { Text("Prima e dopo").font(.title3.weight(.semibold))
                 Text("Prima: \(m.before.lastPathComponent)").font(.caption).foregroundStyle(.secondary).lineLimit(1); Text("Dopo: \(m.after.lastPathComponent)").font(.caption).foregroundStyle(.secondary).lineLimit(1) }
-                Spacer(); Button("Chiudi") { m.stop(); dismiss() }.keyboardShortcut(.cancelAction) }.padding(16)
+                Spacer(); if let s = swap { Button { m.stop(); s() } label: { Label("Inverti prima e dopo", systemImage: "arrow.left.arrow.right") } }
+                Button("Chiudi") { m.stop(); dismiss() }.keyboardShortcut(.cancelAction) }.padding(16)
             Divider()
             ScrollViewReader { proxy in ScrollView { VStack(alignment: .leading, spacing: 20) {
                 verdicts

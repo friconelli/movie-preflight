@@ -9,6 +9,6 @@ struct MoviePreflightApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     var body: some Scene {
         WindowGroup("Movie Preflight") { ContentView(store: AppDelegate.store) }
-            .commands { CommandGroup(replacing: .newItem) { Button("Apri film…") { AppDelegate.store.open() }.keyboardShortcut("o"); Divider(); Button("Controlli sul parlato…") { AppDelegate.store.offerSpeechModel() }; Button("Dati del film online…") { AppDelegate.store.askOnline(force: true) } } }
+            .commands { CommandGroup(replacing: .newItem) { Button("Apri film…") { AppDelegate.store.open() }.keyboardShortcut("o"); Button("Confronta due film…") { AppDelegate.store.compareFiles() }.keyboardShortcut("c", modifiers: [.command, .shift]); Divider(); Button("Controlli sul parlato…") { AppDelegate.store.offerSpeechModel() }; Button("Dati del film online…") { AppDelegate.store.askOnline(force: true) } } }
     }
 }

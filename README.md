@@ -25,6 +25,8 @@ Tutto dentro l'app, senza Homebrew (vedi `THIRD_PARTY_NOTICES.md` e `LICENSE`, G
 ## Confronto prima e dopo
 Dopo una correzione, «Confronta prima e dopo» (nel messaggio di esito o nel menu ⋯) mostra: l'esito dei due rapporti, i problemi **risolti**, **ancora presenti** e **nuovi**, le misure prima/dopo (volume, VMAF…) e i dati tecnici diversi; e poi un confronto da guardare e ascoltare: dal punto scelto (barra o «Punti dei problemi») due **fotogrammi affiancati**, il **testo dei sottotitoli** nello stesso istante e **20 secondi di audio** da ascoltare prima/dopo con commutazione A/B senza perdere la posizione.
 
+**Confrontare due file qualsiasi** (per esempio un originale e una versione corretta fatta altrove): pulsante «Confronta due film» nella barra o File → Confronta due film… (⇧⌘C), scegli i due file (⌘-clic): l'app analizza quelli non ancora analizzati e apre lo stesso confronto. «Prima» è il file chiamato `.orig_backup`, altrimenti il più vecchio; «Inverti prima e dopo» scambia i ruoli.
+
 ## Correzioni
 Dalle segnalazioni (pulsante «Correggi…») o dal pulsante in alto si apre una finestra che mostra tutto quello che verrà fatto, da confermare:
 - traccia **audio predefinita**, **sottotitoli predefiniti** (o nessuno), **lingua** delle tracce senza etichetta;
