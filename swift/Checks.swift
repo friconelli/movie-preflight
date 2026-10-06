@@ -55,6 +55,11 @@ func checkVideo(_ pr: Probe, _ c: Collector) {
     if let st = dbl(v["start_time"]), abs(st) > 0.5 { c.add(.info, "Video", "Il video non parte da zero", String(format: "Inizia a %.2f s.", st)) }
 }
 
+/// Famiglia Dolby di una traccia audio (nil se non è Dolby): Dolby Digital (AC-3), Dolby Digital Plus (E-AC-3), Dolby TrueHD; con Atmos se il profilo lo dichiara.
+func dolbyKind(_ s: [String: Any]) -> String? {
+    let codec = (s["codec_name"] as? String) ?? "", prof = (s["profile"] as? String) ?? ""; let atmos = prof.lowercased().contains("atmos") ? " con Atmos" : ""
+    switch codec { case "ac3": return "Dolby Digital (AC-3)"; case "eac3": return "Dolby Digital Plus (E-AC-3)" + atmos; case "truehd": return "Dolby TrueHD" + atmos; default: return nil }
+}
 func checkAudioStreams(_ pr: Probe, _ c: Collector) {
     let a = pr.audio
     if a.isEmpty { c.add(.error, "Audio", "Nessuna traccia audio", "Il film non ha suono."); return }
@@ -63,9 +68,14 @@ func checkAudioStreams(_ pr: Probe, _ c: Collector) {
         var rows: [(String, String)] = [("Lingua", langLabel(lang(s))), ("Codec", codec.uppercased() + ((s["profile"] as? String).map { " · \($0)" } ?? "")), ("Canali", ((s["channel_layout"] as? String) ?? "\(ch)") + " (\(ch))"), ("Campionamento", "\(Int(dbl(s["sample_rate"]) ?? 0)) Hz")]
         if let br = br { rows.append(("Bitrate", fmtRate(br))) }
         if let t = tg["title"] { rows.append(("Nome", t)) }
+        rows.append(("Dolby", dolbyKind(s).map { "sì — " + $0 } ?? "no (\(codec.uppercased()))"))
         rows.append(("Predefinita", disp(s, "default") == 1 ? "sì" : "no"))
         c.rows("Audio \(i + 1)", order: 10 + i, rows)
         let n = "traccia audio \(i + 1)" + (lang(s).isEmpty ? "" : " (\(langLabel(lang(s))))")
+        if dolbyKind(s) == nil {   // formato diverso da Dolby: si può convertire in Dolby Digital (AC-3) fino a 5.1
+            let isMain = disp(s, "default") == 1 || a.count == 1
+            c.add(isMain ? .warn : .info, "Audio", "Audio non Dolby (\(codec.uppercased())) — \(n)", "Il formato non fa parte della famiglia Dolby (AC-3, E-AC-3, TrueHD)." + (ch > 6 ? " Con più di 6 canali la conversione non è disponibile." : " Si può convertire in Dolby Digital (AC-3), il formato più compatibile con amplificatori e proiettori; da un formato già compresso (AAC, DTS, MP3) si perde un po' di qualità, quindi l'app usa il bitrate più alto."), fix: ch <= 6 ? [.toDolby(i)] : [])
+        } else if (dolbyKind(s) ?? "").contains("Atmos") { c.add(.info, "Audio", "Traccia con Dolby Atmos — \(n)", "Contiene audio a oggetti: non convertirla, si perderebbero gli oggetti.") }
         if lang(s).isEmpty { c.add(.warn, "Audio", "Lingua non indicata — \(n)", "Senza lingua il lettore non sceglie la traccia giusta da solo.", fix: [.setLang("a", i)]) }
         if ch == 1 && a.count > 0 { c.add(.info, "Audio", "Audio mono — \(n)", "In sala uscirà solo da un canale se l'impianto non lo duplica.") }
         if let br = br, br < 64_000 * Double(max(ch, 1)) / 2 && ch <= 2 { c.add(.warn, "Audio", "Bitrate audio basso — \(n)", "\(fmtRate(br)): qualità da telefono, fruscii e suono metallico in sala.") }

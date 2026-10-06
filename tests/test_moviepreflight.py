@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Prova Movie Preflight su film sintetici con difetti noti: ogni controllo deve scattare quando deve e non quando non deve.
 Uso: python3 tests/test_moviepreflight.py   (usa dist/moviepreflight; serve ffmpeg)"""
-import os, subprocess, sys, tempfile, shutil
+import os, re, subprocess, sys, tempfile, shutil
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); BIN = os.path.join(ROOT, "dist", "moviepreflight")
 T = tempfile.mkdtemp(prefix="moviepreflight-test-"); ok = bad = 0
 def ff(*a): subprocess.run(["ffmpeg", "-y", "-nostdin", "-loglevel", "error", *a], check=True, stdin=subprocess.DEVNULL)
@@ -104,6 +104,12 @@ try:
     f = two("fix4.mkv"); rc, o = fix(f, "--drop-audio", "0", "--drop-audio", "1"); check(rc != 0 and len(tracks(f, "audio")) == 2, "non si eliminano tutte le tracce audio")
     rc, o = fix(f, "--audio-default", "5"); check(rc != 0, "traccia predefinita inesistente rifiutata")
     rc, o = fix(f, "--trim-start", "100000"); check(rc != 0 and not os.path.exists(f.replace(".mkv", ".orig_backup.mkv")), "taglio impossibile: nessuna modifica")
+    print("== Dolby")
+    ac = video("aac.mkv", af="sine=f=300:d=%d,volume=0.2" % D); o = analyze(ac)
+    check("Audio non Dolby (AAC)" in o and "Dolby: no (AAC)" in o, "traccia AAC segnalata come non Dolby")
+    rc, o = fix(ac, "--dolby", "0"); m = re.search(r"prima:\s+(-?[\d.]+) LUFS.*\n.*dopo:\s+(-?[\d.]+) LUFS", o)
+    check(rc == 0 and tracks(ac, "audio")[0]["codec_name"] == "ac3" and m is not None and abs(float(m.group(1)) - float(m.group(2))) < 1.0, f"conversione in AC-3 senza cambiare il volume ({m.group(1) if m else '?'} → {m.group(2) if m else '?'} LUFS)")
+    o = analyze(ac); check("non Dolby" not in o and "Dolby: sì — Dolby Digital (AC-3)" in o, "dopo la conversione la traccia risulta Dolby")
     print("== deinterlacciamento")
     il = os.path.join(T, "interl.mkv")
     ff("-f", "lavfi", "-i", "mandelbrot=s=640x360:r=25", "-f", "lavfi", "-i", "sine=d=200", "-t", "200", "-map", "0:v", "-map", "1:a", "-vf", "interlace=scan=tff", "-c:v", "libx264", "-preset", "ultrafast", "-flags", "+ilme+ildct", "-b:v", "6M", "-c:a", "aac", il)

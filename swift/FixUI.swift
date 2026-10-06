@@ -27,6 +27,7 @@ struct FixSheet: View {
                     HStack { Text("Traccia predefinita").frame(width: 150, alignment: .leading)
                         Picker("", selection: Binding(get: { plan.audioDefault ?? -1 }, set: { plan.audioDefault = $0 < 0 ? nil : $0 })) { Text("Invariata").tag(-1); ForEach(report.audioTracks) { Text(label($0)).tag($0.ord) } }.labelsHidden() }
                     ForEach(report.audioTracks) { t in trackRow(t, kind: "a") {
+                        if t.codec != "ac3" && t.codec != "eac3" && t.codec != "truehd" && t.channels <= 6 { Toggle("Converti in Dolby Digital (AC-3)", isOn: Binding(get: { plan.toDolby.contains(t.ord) }, set: { if $0 { plan.toDolby.insert(t.ord) } else { plan.toDolby.remove(t.ord) } })).disabled(plan.dropAudio.contains(t.ord)) }
                         Toggle("Porta il volume a un livello standard (-24 LUFS, guadagno fisso)", isOn: Binding(get: { plan.levelGain.contains(t.ord) }, set: { if $0 { plan.levelGain.insert(t.ord) } else { plan.levelGain.remove(t.ord) } })).disabled(plan.dropAudio.contains(t.ord) || t.channels > 6)
                         Text("Sale o scende tutto insieme: la dinamica del film non cambia.").font(.caption).foregroundStyle(.secondary).padding(.leading, 20)
                         DisclosureGroup("Avanzate") {
@@ -36,7 +37,7 @@ struct FixSheet: View {
                             }.padding(.top, 2)
                         }.font(.callout)
                         if t.channels == 6 { Toggle("Alza i dialoghi (canale centrale +4 dB)", isOn: Binding(get: { plan.boostCenter.contains(t.ord) }, set: { if $0 { plan.boostCenter.insert(t.ord) } else { plan.boostCenter.remove(t.ord) } })).disabled(plan.dropAudio.contains(t.ord)) }
-                        Toggle("Elimina questa traccia", isOn: Binding(get: { plan.dropAudio.contains(t.ord) }, set: { if $0 { plan.dropAudio.insert(t.ord); plan.normalize.remove(t.ord); plan.boostCenter.remove(t.ord); plan.levelGain.remove(t.ord) } else { plan.dropAudio.remove(t.ord) } })).disabled(report.audioTracks.count < 2)
+                        Toggle("Elimina questa traccia", isOn: Binding(get: { plan.dropAudio.contains(t.ord) }, set: { if $0 { plan.dropAudio.insert(t.ord); plan.normalize.remove(t.ord); plan.boostCenter.remove(t.ord); plan.levelGain.remove(t.ord); plan.toDolby.remove(t.ord) } else { plan.dropAudio.remove(t.ord) } })).disabled(report.audioTracks.count < 2)
                     } } } }
                 if !report.subTracks.isEmpty { group("Sottotitoli") {
                     HStack { Text("Predefiniti").frame(width: 150, alignment: .leading)

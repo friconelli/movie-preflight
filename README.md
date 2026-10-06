@@ -15,6 +15,7 @@ Dalle segnalazioni (pulsante «Correggi…») o dal pulsante in alto si apre una
 - **togliere pubblicità e crediti** dai sottotitoli, **eliminare** tracce audio/sottotitoli;
 - **tagliare** l'inizio o la fine (crediti del torrent nell'immagine) senza ricodificare, sui fotogrammi chiave;
 - **alzare i dialoghi** (canale centrale +4 dB con limitatore) nei 5.1 dove la musica li copre;
+- **convertire in Dolby Digital (AC-3)** le tracce che non sono Dolby (fino a 5.1; 640 kb/s per il 5.1, 384 per lo stereo), con controllo che il volume non cambi;
 - **portare il volume a un livello standard** (-24 LUFS) con un **guadagno fisso**: sale o scende tutto insieme, la dinamica non cambia;
 - **deinterlacciare l'immagine** (`bwdif`, ricodifica x264/x265 ad alta qualità nello stesso codec e profondità colore);
 - (avanzata, sconsigliata) **compressione dinamica** `dynaudnorm`+`alimiter`: può abbassare la musica sotto il parlato e rialzarla dove c'è solo musica.
@@ -29,7 +30,7 @@ Sicurezza: solo etichette in un mkv → modifica sul posto con mkvpropedit, senz
 ## Uso
     ./build.sh                       # dist/Movie Preflight.app (+ dist/moviepreflight per la riga di comando)
     dist/moviepreflight --analyze film.mkv # rapporto testuale
-    python3 tests/test_moviepreflight.py   # 42 controlli su film sintetici con difetti noti
+    python3 tests/test_moviepreflight.py   # 45 controlli su film sintetici con difetti noti
 
 ffmpeg e ffprobe vengono copiati dentro l'app dallo script `tools/bundle_ffmpeg.py` (con le loro librerie, percorsi riscritti: funziona anche senza Homebrew; `BUNDLE_FFMPEG=0 ./build.sh` per saltare e usare quelli di /opt/homebrew/bin). Per distribuire l'app pubblicamente tieni conto della licenza di ffmpeg (la build di Homebrew include componenti GPL). Solo Apple Silicon (arm64), macOS 13+. Non modifica mai i file analizzati.
 
