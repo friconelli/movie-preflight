@@ -15,7 +15,7 @@ cat > "$A/Contents/Info.plist" <<P
 <key>CFBundleTypeExtensions</key><array><string>mp4</string><string>mkv</string><string>avi</string><string>m4v</string><string>mov</string></array></dict></array></dict></plist>
 P
 # ffmpeg e ffprobe con le loro librerie dentro l'app (BUNDLE_FFMPEG=0 per saltare e usare quelli di Homebrew)
-[ "${BUNDLE_FFMPEG:-1}" = 1 ] && python3 tools/bundle_ffmpeg.py "$A/Contents/Resources"
+[ "${BUNDLE_FFMPEG:-1}" = 1 ] && python3 tools/bundle_tools.py "$A/Contents/Resources"
 [ -f icon/MoviePreflight.icns ] && cp icon/MoviePreflight.icns "$A/Contents/Resources/MoviePreflight.icns" && sed -i '' 's|<key>CFBundlePackageType</key>|<key>CFBundleIconFile</key><string>MoviePreflight</string><key>CFBundlePackageType</key>|' "$A/Contents/Info.plist"
 codesign --force -s - -r='designated => identifier "'$BUNDLE_ID'"' "$A"
 ln -sf "$NAME.app/Contents/MacOS/$EXE" dist/moviepreflight

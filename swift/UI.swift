@@ -9,7 +9,7 @@ final class Job: ObservableObject, Identifiable {
     init(_ u: URL) { url = u }
 }
 final class Store: ObservableObject {
-    @Published var jobs: [Job] = []; @Published var selection: UUID?
+    @Published var jobs: [Job] = []; @Published var selection: UUID?; @Published var modelProgress: Double?
     private let q = DispatchQueue(label: "analisi")   // un film alla volta: le analisi usano già tutti i core
     static let exts: Set<String> = ["mp4", "mkv", "avi", "m4v", "mov"]
     func add(_ urls: [URL]) {
@@ -17,12 +17,32 @@ final class Store: ObservableObject {
             var d: ObjCBool = false; FileManager.default.fileExists(atPath: u.path, isDirectory: &d)
             if d.boolValue { return ((try? FileManager.default.contentsOfDirectory(at: u, includingPropertiesForKeys: nil)) ?? []).sorted { $0.path < $1.path } }; return [u] }
             .filter { Store.exts.contains($0.pathExtension.lowercased()) }
-        for u in files {
-            let j = Job(u); jobs.append(j); selection = j.id
-            q.async { [weak j] in
-                guard let j = j else { return }
-                let r = analyze(j.url) { p, s in DispatchQueue.main.async { j.progress = p; j.stage = s } }
-                DispatchQueue.main.async { j.report = r; j.progress = 1 }
+        if !files.isEmpty && whisperModelPath() == nil && tool("whisper-cli") != nil && !UserDefaults.standard.bool(forKey: "speechOfferAsked") { UserDefaults.standard.set(true, forKey: "speechOfferAsked"); offerSpeechModel() }
+        for u in files { let j = Job(u); jobs.append(j); selection = j.id; startAnalysis(j) }
+    }
+    func startAnalysis(_ j: Job) {
+        j.report = nil; j.progress = 0; j.stage = "In coda"; j.fixResult = nil
+        q.async { [weak j] in
+            guard let j = j else { return }
+            let r = analyze(j.url) { p, s in DispatchQueue.main.async { j.progress = p; j.stage = s } }
+            DispatchQueue.main.async { j.report = r; j.progress = 1 }
+        }
+    }
+    /// Chiede il consenso e scarica il modello vocale (whisper, open source, 148 MB) per i controlli sulla lingua parlata e sulla sincronia dei sottotitoli.
+    func offerSpeechModel() {
+        let a = NSAlert()
+        if whisperModelPath() != nil { a.messageText = "Controlli sul parlato attivi"; a.informativeText = "Il modello vocale è già installato."; a.runModal(); return }
+        a.messageText = "Controlli sul parlato"
+        a.informativeText = "Per verificare la lingua realmente parlata nelle tracce audio e la sincronia dei sottotitoli serve un modello vocale open source (whisper, 148 MB, scaricato una sola volta). I film non vengono mai inviati da nessuna parte: l'analisi resta sul tuo Mac."
+        a.addButton(withTitle: "Scarica"); a.addButton(withTitle: "Non ora")
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+        modelProgress = 0
+        DispatchQueue.global().async { [weak self] in
+            let ok = downloadWhisperModel { p in DispatchQueue.main.async { self?.modelProgress = p } }
+            DispatchQueue.main.async {
+                self?.modelProgress = nil
+                if !ok { let e = NSAlert(); e.messageText = "Scaricamento non riuscito"; e.informativeText = "Controlla la connessione e riprova da File → Controlli sul parlato…"; e.runModal() }
+                else { let e = NSAlert(); e.messageText = "Modello scaricato"; e.informativeText = "Premi «Rianalizza» sui film già analizzati per aggiungere i controlli sul parlato."; e.runModal() }
             }
         }
     }
@@ -69,7 +89,10 @@ struct ContentView: View {
         .onDrop(of: [.fileURL], isTargeted: $hover) { ps in
             for p in ps { _ = p.loadObject(ofClass: URL.self) { u, _ in if let u = u { DispatchQueue.main.async { store.add([u]) } } } }; return true }
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.accentColor, lineWidth: hover ? 3 : 0).padding(6).allowsHitTesting(false))
-        .toolbar { ToolbarItem { Button { store.open() } label: { Label("Aggiungi film", systemImage: "plus") } } }
+        .toolbar {
+            if let p = store.modelProgress { ToolbarItem { HStack { Text("Scarico il modello vocale…").font(.caption).foregroundStyle(.secondary); ProgressView(value: p).frame(width: 110) } } }
+            ToolbarItem { Button { store.open() } label: { Label("Aggiungi film", systemImage: "plus") } }
+        }
     }
 }
 struct DropHint: View {
@@ -111,6 +134,7 @@ struct JobDetail: View {
                         let c = r.counts; Text("\(c.err) problemi · \(c.warn) attenzioni · \(c.info) note — analisi in \(Int(r.seconds)) s").font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
+                    Button { store.startAnalysis(job) } label: { Label("Rianalizza", systemImage: "arrow.clockwise") }.disabled(job.fixProgress != nil)
                     Button { sheetPlan = FixPlan() } label: { Label("Correggi…", systemImage: "wand.and.stars") }.disabled(job.fixProgress != nil)
                     Button { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(r.text, forType: .string) } label: { Label("Copia", systemImage: "doc.on.doc") }
                     Button { save(r) } label: { Label("Salva…", systemImage: "square.and.arrow.down") }

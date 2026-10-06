@@ -45,9 +45,17 @@ struct FixSheet: View {
                             Text("Invariati").tag(-2); Text("Nessuno (partono spenti)").tag(-1); ForEach(report.subTracks) { Text(label($0)).tag($0.ord) } }.labelsHidden() }
                     ForEach(report.subTracks) { t in trackRow(t, kind: "s") {
                         Toggle("Togli le battute con pubblicità e crediti", isOn: Binding(get: { plan.cleanSubs.contains(t.ord) }, set: { if $0 { plan.cleanSubs.insert(t.ord) } else { plan.cleanSubs.remove(t.ord) } })).disabled(t.image || plan.dropSubs.contains(t.ord))
+                        if !t.image { HStack { Text("Sposta i sottotitoli di").font(.callout)
+                            TextField("0", text: Binding(get: { plan.syncSubs[t.ord].map { String(format: "%g", $0.b) } ?? "" }, set: { v in if let d = Double(v.replacingOccurrences(of: ",", with: ".")), d != 0 { plan.syncSubs[t.ord] = (plan.syncSubs[t.ord]?.a ?? 1, d) } else if v.isEmpty || Double(v.replacingOccurrences(of: ",", with: ".")) == 0 { if (plan.syncSubs[t.ord]?.a ?? 1) == 1 { plan.syncSubs[t.ord] = nil } } })).frame(width: 70).textFieldStyle(.roundedBorder)
+                            Text("s (negativo = prima)").font(.caption).foregroundStyle(.secondary)
+                            if let a = plan.syncSubs[t.ord]?.a, a != 1 { Text(String(format: "· allungati × %.5f", a)).font(.caption).foregroundStyle(.secondary) } } }
                         Toggle("Elimina questa traccia", isOn: Binding(get: { plan.dropSubs.contains(t.ord) }, set: { if $0 { plan.dropSubs.insert(t.ord); plan.cleanSubs.remove(t.ord) } else { plan.dropSubs.remove(t.ord) } }))
                     } } } }
+                group("Contenitore") {
+                    Toggle("Togli il titolo dai metadati del file", isOn: $plan.clearTitle)
+                }
                 group("Immagine") {
+                    Toggle("Converti da HDR a SDR (zscale + tone mapping)", isOn: $plan.tonemap)
                     Toggle("Rimuovi l'interlacciamento (bwdif)", isOn: $plan.deinterlace)
                     Text("Ricodifica l'immagine con codec ad alta qualità: può durare quanto il film. Dopo la scrittura l'app misura la qualità (VMAF) e annulla tutto se l'immagine peggiora.").font(.caption).foregroundStyle(.secondary)
                 }

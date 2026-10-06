@@ -40,17 +40,27 @@ func scanPackets(_ pr: Probe, _ path: String, _ c: Collector) {
 }
 
 // MARK: finestre video: interlacciamento, bande nere, neri, fermi immagine, errori di decodifica
-struct WinResult { var interl = 0, prog = 0; var crops: [String: Int] = [:]; var blacks: [(Double, Double)] = []; var freezes: [(Double, Double)] = []; var errs: [String] = [] }
+struct WinResult { var brng = 0.0, tout = 0.0, block = 0.0, blur = 0.0, qn = 0; var interl = 0, prog = 0; var crops: [String: Int] = [:]; var blacks: [(Double, Double)] = []; var freezes: [(Double, Double)] = []; var errs: [String] = [] }
 private func videoWindow(_ path: String, _ start: Double, _ len: Double) -> WinResult {
     var r = WinResult(); guard let ff = tool("ffmpeg") else { return r }
-    let vf = "idet,cropdetect=limit=0.1:round=2:reset=1,blackdetect=d=0.4:pic_th=0.97:pix_th=0.10,freezedetect=n=-60dB:d=3"
-    run(ff, ["-nostats", "-hide_banner", "-ss", String(start), "-t", String(len), "-i", path, "-map", "0:v:0", "-an", "-sn", "-vf", vf, "-f", "null", "-"]) { l in
+    let vf = "idet,cropdetect=limit=0.1:round=2:reset=1,blackdetect=d=0.4:pic_th=0.97:pix_th=0.10,freezedetect=n=-60dB:d=3,signalstats=stat=tout+brng,blockdetect,blurdetect,metadata=mode=print:file=-"
+    let o = run(ff, ["-nostats", "-hide_banner", "-ss", String(start), "-t", String(len), "-i", path, "-map", "0:v:0", "-an", "-sn", "-vf", vf, "-f", "null", "-"]) { l in
         if let m = l.match(#"Multi frame detection: TFF:\s*(\d+) BFF:\s*(\d+) Progressive:\s*(\d+)"#) { r.interl += (Int(m[1]) ?? 0) + (Int(m[2]) ?? 0); r.prog += Int(m[3]) ?? 0 }
         else if let m = l.match(#"crop=(\d+:\d+:\d+:\d+)"#) { r.crops[m[1], default: 0] += 1 }
         else if let m = l.match(#"black_start:([\d.]+) black_end:([\d.]+)"#) { r.blacks.append((start + (Double(m[1]) ?? 0), (Double(m[2]) ?? 0) - (Double(m[1]) ?? 0))) }
         else if let m = l.match(#"freeze_duration: ([\d.]+)"#) { r.freezes.append((start, Double(m[1]) ?? 0)) }
         else if l.has(#"error while decoding|corrupt|invalid (nal|data|frame)|missing reference|concealing|co located POCs|reference picture missing|Invalid data found"#) { r.errs.append(l) }
     }
+    // segnale (signalstats), blocchi e sfocatura: medie sui fotogrammi del tratto
+    var n = 0, b1 = 0.0, t1 = 0.0, bk = 0.0, bl = 0.0, bkn = 0, bln = 0
+    for l in o.text.split(separator: "\n") {
+        if l.hasPrefix("frame:") { n += 1 }
+        else if l.hasPrefix("lavfi.signalstats.BRNG=") { b1 += Double(l.dropFirst(23)) ?? 0 }
+        else if l.hasPrefix("lavfi.signalstats.TOUT=") { t1 += Double(l.dropFirst(23)) ?? 0 }
+        else if l.hasPrefix("lavfi.block="), let v = Double(l.dropFirst(12)), v.isFinite { bk += v; bkn += 1 }
+        else if l.hasPrefix("lavfi.blur="), let v = Double(l.dropFirst(11)), v.isFinite { bl += v; bln += 1 }
+    }
+    if n > 0 { r.qn = n; r.brng = b1 / Double(n); r.tout = t1 / Double(n); r.block = bkn > 0 ? bk / Double(bkn) : 0; r.blur = bln > 0 ? bl / Double(bln) : 0 }
     return r
 }
 func scanVideoWindows(_ pr: Probe, _ path: String, _ c: Collector, progress: @escaping (Double) -> Void) {
@@ -79,6 +89,15 @@ func scanVideoWindows(_ pr: Probe, _ path: String, _ c: Collector, progress: @es
     if let b = res[2].blacks.last, b.0 + b.1 >= d - 2, b.1 > 20 { c.add(.warn, "Video", String(format: "Nero finale lungo (%.0f s)", b.1), "Dopo la fine il film resta nero a lungo.", time: b.0) }
     if let b = res[1].blacks.first(where: { $0.1 > 5 }) { c.add(.warn, "Video", String(format: "Schermo nero di %.0f s a metà film", b.1), "Se non è voluto può indicare un pezzo mancante o un errore di codifica.", time: b.0) }
     for (i, r) in res.enumerated() { if let f = r.freezes.first(where: { $0.1 > 8 }) { c.add(.info, "Video", String(format: "Immagine ferma per %.0f s (%@)", f.1, wins[i].0), "Fermo immagine o scheda fissa.", time: f.0) } }
+    let q = res.filter { $0.qn > 100 }
+    if !q.isEmpty {
+        let brng = q.map(\.brng).reduce(0, +) / Double(q.count), tout = q.map(\.tout).reduce(0, +) / Double(q.count), block = q.map(\.block).reduce(0, +) / Double(q.count), blur = q.map(\.blur).reduce(0, +) / Double(q.count)
+        c.rows("Video", order: 1, [("Livelli fuori standard", String(format: "%.2f%% dei pixel (nei tratti campionati)", brng * 100)), ("Blocchettatura / sfocatura", String(format: "%.2f / %.1f", block, blur))])
+        if brng > 0.05 { c.add(.warn, "Video", "Livelli luminosi fuori standard", String(format: "Il %.1f%% dei pixel è fuori dalla gamma di luminosità legale (16-235; nei film normali resta sotto l'1,5%%): bianchi o neri bruciati nel passaggio al proiettore.", brng * 100)) }
+        if tout > 0.005 { c.add(.warn, "Video", "Disturbi puntuali nell'immagine (dropout)", String(format: "Lo %.2f%% dei pixel risulta anomalo rispetto ai fotogrammi vicini: tipico di una sorgente rovinata.", tout * 100)) }
+        if block > 4 { c.add(.info, "Video", "Immagine con blocchettatura (compressione troppo forte)", String(format: "Indice di blocchettatura %.1f (nei tuoi film normali 1-2,5): si vedono quadretti nelle zone piatte e nelle scene scure.", block)) }
+        if blur > 14 { c.add(.info, "Video", "Immagine molto sfocata", String(format: "Indice di sfocatura %.1f (nei tuoi film normali 5-7): poca nitidezza, possibile sorgente a bassa risoluzione ingrandita.", blur)) }
+    }
     for (i, r) in res.enumerated() where !r.errs.isEmpty { c.add(.warn, "Video", "Errori di decodifica (\(wins[i].0))", "\(r.errs.count) segnalazioni, es.: \(String(r.errs[0].prefix(110))). Possibili blocchi o quadretti nell'immagine.", time: wins[i].1) }
 }
 

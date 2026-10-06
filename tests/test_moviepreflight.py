@@ -104,12 +104,60 @@ try:
     f = two("fix4.mkv"); rc, o = fix(f, "--drop-audio", "0", "--drop-audio", "1"); check(rc != 0 and len(tracks(f, "audio")) == 2, "non si eliminano tutte le tracce audio")
     rc, o = fix(f, "--audio-default", "5"); check(rc != 0, "traccia predefinita inesistente rifiutata")
     rc, o = fix(f, "--trim-start", "100000"); check(rc != 0 and not os.path.exists(f.replace(".mkv", ".orig_backup.mkv")), "taglio impossibile: nessuna modifica")
+    print("== titolo, HDR→SDR, qualità")
+    tt = video("titolo.mkv", meta=["title=Film Bello [HD4ME]"]); o = analyze(tt)
+    check("sigla di un gruppo di rilascio" in o, "sigla del gruppo di rilascio nel titolo rilevata")
+    rc, o2 = fix(tt, "--clear-title"); o = analyze(tt); check(rc == 0 and "gruppo di rilascio" not in o and "Titolo nei metadati" not in o, "titolo tolto dal contenitore")
+    check("Livelli fuori standard" in o and "Blocchettatura" in o, "controlli di segnale e qualità eseguiti")
+    hd = video("hdr_tm.mkv", extra=["-x264-params", "colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc"])
+    rc, o = fix(hd, "--tonemap"); v = tracks(hd, "video")[0] if rc == 0 else {}
+    check(rc == 0 and v.get("color_transfer") == "bt709" and "luminanza media" in o and os.path.exists(hd.replace(".mkv", ".orig_backup.mkv")), f"HDR convertito in SDR con controllo della luminanza ({v.get('color_transfer')})")
+    rc, o = fix(os.path.join(T, "pulito.mkv"), "--tonemap"); check(rc != 0 and "non è HDR" in o, "conversione HDR rifiutata su un video SDR")
     print("== Dolby")
     ac = video("aac.mkv", af="sine=f=300:d=%d,volume=0.2" % D); o = analyze(ac)
     check("Audio non Dolby (AAC)" in o and "Dolby: no (AAC)" in o, "traccia AAC segnalata come non Dolby")
     rc, o = fix(ac, "--dolby", "0"); m = re.search(r"prima:\s+(-?[\d.]+) LUFS.*\n.*dopo:\s+(-?[\d.]+) LUFS", o)
     check(rc == 0 and tracks(ac, "audio")[0]["codec_name"] == "ac3" and m is not None and abs(float(m.group(1)) - float(m.group(2))) < 1.0, f"conversione in AC-3 senza cambiare il volume ({m.group(1) if m else '?'} → {m.group(2) if m else '?'} LUFS)")
     o = analyze(ac); check("non Dolby" not in o and "Dolby: sì — Dolby Digital (AC-3)" in o, "dopo la conversione la traccia risulta Dolby")
+    print("== parlato (whisper)")
+    if shutil.which("say") and os.path.exists(os.path.expanduser("~/Library/Application Support/Movie Preflight/models/ggml-base.bin")):
+        N = 100   # 100 frasi sintetiche con tempi noti
+        sentsIT = ["Buongiorno a tutti, oggi parleremo di una storia molto importante.", "Non ho mai visto una cosa del genere in tutta la mia vita.", "Vieni qui subito, abbiamo moltissime cose da fare prima di sera.",
+                   "La macchina è partita ieri mattina e non è ancora tornata a casa.", "Dimmi la verità, perché non mi hai chiamato quando sei arrivato?", "Il tempo è cambiato molto negli ultimi anni, e non solo qui da noi."]
+        sentsEN = ["Good morning everyone, today we are going to talk about a very important story.", "I have never seen anything like this in my whole life.", "Come here right now, we have so many things to do before tonight.",
+                   "The car left yesterday morning and it still has not come back home.", "Tell me the truth, why did you not call me when you arrived?", "The weather has changed a lot in recent years, and not only around here."]
+        slots = [6.2 + ((i * 7919) % 13) * 0.35 for i in range(N)]   # tempi irregolari come nel parlato vero (un ritmo fisso renderebbe ambiguo lo spostamento)
+        starts = [sum(slots[:i]) for i in range(N)]
+        def speech(voice, sents, name):
+            durs = []
+            for i, t in enumerate(sents):
+                a = os.path.join(T, f"{name}{i}.aiff"); subprocess.run(["say", "-v", voice, "-o", a, t], check=True)
+                durs.append(float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", a], capture_output=True, text=True).stdout))
+            lst = os.path.join(T, name + ".txt"); open(lst, "w").write("")
+            parts = []
+            for i in range(N):
+                w = os.path.join(T, f"{name}_s{i}.wav"); ff("-i", os.path.join(T, f"{name}{i % len(sents)}.aiff"), "-ar", "16000", "-ac", "1", "-af", f"apad=whole_dur={slots[i]:.3f}", "-t", f"{slots[i]:.3f}", w); parts.append(w)
+            open(lst, "w").write("".join(f"file '{w}'\n" for w in parts))
+            out = os.path.join(T, name + "_all.wav"); ff("-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", out); return out, durs
+        def film(name, wav, cues, lang_tag):
+            sub = os.path.join(T, name + ".srt"); open(sub, "w").write("\n".join(f"{i+1}\n{fmt(a)} --> {fmt(b)}\nFrase {i}\n" for i, (a, b) in enumerate(cues)))
+            out = os.path.join(T, name + ".mkv")
+            ff("-f", "lavfi", "-t", f"{sum(slots):.1f}", "-i", "testsrc2=s=320x180:r=10", "-i", wav, "-i", sub, "-map", "0:v", "-map", "1:a", "-map", "2", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-c:s", "srt",
+               "-metadata:s:a:0", f"language={lang_tag}", "-metadata:s:s:0", "language=ita", out); return out
+        def fmt(x): ms = int(round(x * 1000)); return f"{ms // 3600000:02d}:{ms // 60000 % 60:02d}:{ms // 1000 % 60:02d},{ms % 1000:03d}"
+        wavIT, dIT = speech("Alice", sentsIT, "it"); wavEN, dEN = speech("Albert", sentsEN, "en")
+        cues = [(starts[i] + 0.3, starts[i] + 0.3 + dIT[i % len(dIT)]) for i in range(N)]
+        f1 = film("sync_ok", wavIT, cues, "ita"); o = analyze(f1)
+        check("Lingua parlata (rilevata): italiano" in o and "non corrisponde" not in o, "lingua parlata riconosciuta (italiano) senza falsi allarmi")
+        check("sfasati" not in o and "si sfasano" not in o, "sottotitoli sincronizzati: nessun allarme")
+        f2 = film("sync_shift", wavIT, [(a + 6.0, b + 6.0) for a, b in cues], "ita"); o = analyze(f2)
+        check("Sottotitoli sfasati di" in o, "sottotitoli in ritardo di 6 s rilevati")
+        rc, o2 = fix(f2, "--sync-sub", "0:1:-6.0"); o3 = analyze(f2)
+        check(rc == 0 and "risincronizzati" in o2 and "sfasati" not in o3, "sottotitoli risincronizzati con la correzione")
+        f3 = film("lang_wrong", wavEN, [(a, b) for a, b in cues], "ita"); o = analyze(f3)
+        check("La lingua parlata non corrisponde all'etichetta" in o and "inglese" in o, "audio inglese etichettato italiano rilevato")
+        rc, o2 = fix(f3, "--lang", "a0=eng"); check(rc == 0 and tracks(f3, "audio")[0]["tags"]["language"] == "eng", "etichetta di lingua corretta")
+    else: print("  (saltato: serve `say` e il modello vocale)")
     print("== deinterlacciamento")
     il = os.path.join(T, "interl.mkv")
     ff("-f", "lavfi", "-i", "mandelbrot=s=640x360:r=25", "-f", "lavfi", "-i", "sine=d=200", "-t", "200", "-map", "0:v", "-map", "1:a", "-vf", "interlace=scan=tff", "-c:v", "libx264", "-preset", "ultrafast", "-flags", "+ilme+ildct", "-b:v", "6M", "-c:a", "aac", il)

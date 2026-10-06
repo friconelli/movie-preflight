@@ -46,3 +46,28 @@ func deinterlaceQC(source: String, new: String, duration: Double, lines: inout [
     if mean < 93 || scores.min()! < 88 { return String(format: "la codifica avrebbe degradato l'immagine (VMAF %.1f, minimo accettato 93)", mean) }
     return nil
 }
+
+/// HDR (PQ o HLG) → SDR BT.709 con zimg (zscale) e tone mapping Hable: la catena usata in post-produzione e nei server multimediali.
+func tonemapFilter(_ v: [String: Any]) -> String {
+    let tin = (v["color_transfer"] as? String) == "arib-std-b67" ? "arib-std-b67" : "smpte2084"
+    let min = (v["color_space"] as? String).flatMap { $0 == "unknown" ? nil : $0 } ?? "bt2020nc", pin = (v["color_primaries"] as? String).flatMap { $0 == "unknown" ? nil : $0 } ?? "bt2020"
+    return "zscale=tin=\(tin):min=\(min):pin=\(pin):rin=tv:t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p"
+}
+/// Dopo la conversione: tag SDR corretti e immagine né nera né bruciata (luminanza media e pixel illegali).
+func tonemapQC(new: String, duration: Double, lines: inout [String]) -> String? {
+    guard let fp = tool("ffprobe"), let ff = tool("ffmpeg") else { return "strumenti mancanti" }
+    let o = run(fp, ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=color_transfer,color_primaries,pix_fmt", "-of", "csv=p=0", new]).text.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !o.contains("bt709") || o.contains("smpte2084") { return "il file risultante non è marcato come SDR BT.709 (\(o))" }
+    var yavg: [Double] = [], brng: [Double] = []
+    for s in [0.2, 0.5, 0.8] {
+        let t = max(0, min(s * duration, duration - 15))
+        let r = run(ff, ["-nostdin", "-nostats", "-v", "error", "-ss", String(t), "-t", "10", "-i", new, "-map", "0:v:0", "-an", "-vf", "signalstats=stat=brng,metadata=mode=print:file=-", "-f", "null", "-"])
+        for l in r.text.split(separator: "\n") { if l.hasPrefix("lavfi.signalstats.YAVG=") { yavg.append(Double(l.dropFirst(23)) ?? 0) } else if l.hasPrefix("lavfi.signalstats.BRNG=") { brng.append(Double(l.dropFirst(23)) ?? 0) } }
+    }
+    guard yavg.count > 30 else { return "non riesco a misurare l'immagine convertita" }
+    let y = yavg.reduce(0, +) / Double(yavg.count), b = brng.reduce(0, +) / Double(max(1, brng.count))
+    lines.append(String(format: "Immagine SDR: luminanza media %.0f/255, pixel fuori standard %.2f%%", y, b * 100))
+    if y < 15 || y > 190 { return String(format: "la luminanza media dell'immagine convertita (%.0f/255) è fuori misura", y) }
+    if b > 0.5 { return String(format: "oltre la metà dei pixel è fuori standard dopo la conversione (%.0f%%)", b * 100) }
+    return nil
+}

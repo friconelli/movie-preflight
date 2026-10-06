@@ -30,7 +30,9 @@ func analyze(_ url: URL, progress: @escaping (Double, String) -> Void = { _, _ i
 
     let nAudio = min(pr.audio.count, 3)
     let nDial = pr.audio.prefix(2).filter { (dbl($0["channels"]) ?? 0) == 6 }.count
-    let prog = Progress(total: 5 + nAudio + nDial) { progress($0, $1) }
+    let model = CommandLine.arguments.contains("--no-speech") ? nil : whisperModelPath()
+    let doSpeech = model != nil && tool("whisper-cli") != nil && pr.duration > 600
+    let prog = Progress(total: 6 + nAudio + nDial + (doSpeech ? 1 : 0)) { progress($0, $1) }
     prog.set("0probe", 1, "Lettura dei dati")
     func info(_ s: [String: Any], _ i: Int) -> TrackInfo { let tg = tags(s); return TrackInfo(ord: i, lang: lang(s), title: tg["title"] ?? "", codec: (s["codec_name"] as? String) ?? "?", channels: Int(dbl(s["channels"]) ?? 0), isDefault: disp(s, "default") == 1, forced: disp(s, "forced") == 1, image: imageSubs.contains((s["codec_name"] as? String) ?? ""), bitrate: dbl(s["bit_rate"]) ?? dbl(tg["bps"]) ?? 0) }
     rep.audioTracks = pr.audio.enumerated().map { info($1, $0) }; rep.subTracks = pr.subs.enumerated().map { info($1, $0) }
@@ -44,6 +46,9 @@ func analyze(_ url: URL, progress: @escaping (Double, String) -> Void = { _, _ i
     go("2video", "Analisi dell'immagine") { scanVideoWindows(pr, path, col) { prog.set("2video", $0) } }
     go("3titoli", "Ricerca dei crediti nelle immagini") { scanCredits(pr, path, tmp, col) { prog.set("3titoli", $0) } }
     go("4sub", "Lettura dei sottotitoli") { scanSubtitles(pr, path, tmp, col) }
+    go("4mediainfo", "Dettagli MediaInfo") { scanMediaInfo(pr, path, col) }
+    if doSpeech, let model = model { go("7parlato", "Ascolto del parlato (lingua e sincronia)") { scanSpeech(pr, path, tmp, col, model: model) { prog.set("7parlato", $0) } } }
+    else if whisperModelPath() == nil && tool("whisper-cli") != nil && pr.duration > 600 { col.add(.info, "Audio", "Controlli sul parlato non eseguiti", "Per verificare la lingua realmente parlata e la sincronia dei sottotitoli serve il modello vocale (148 MB, una sola volta, open source). Si scarica da File → Controlli sul parlato….") }
     for k in 0..<nAudio { go("5audio\(k)", "Misura dell'audio (traccia \(k + 1))") { scanAudio(pr, path, k, col) { prog.set("5audio\(k)", $0) } } }
     for k in 0..<min(2, pr.audio.count) where (dbl(pr.audio[k]["channels"]) ?? 0) == 6 { go("6dialoghi\(k)", "Misura dei dialoghi (traccia \(k + 1))") { scanDialogue(pr, path, k, col) } }
     g.wait()

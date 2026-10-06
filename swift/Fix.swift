@@ -8,12 +8,15 @@ struct FixPlan {
     var audioDefault: Int?; var subDefault: SubDefault = .keep
     var lang: [String: String] = [:]                 // "a0" / "s1" → codice lingua a 3 lettere
     var cleanSubs: Set<Int> = [], dropSubs: Set<Int> = [], dropAudio: Set<Int> = [], normalize: Set<Int> = [], boostCenter: Set<Int> = [], levelGain: Set<Int> = [], toDolby: Set<Int> = []
+    var syncSubs: [Int: (a: Double, b: Double)] = [:]   // sottotitoli da risincronizzare: tempo nuovo = a·tempo + b
+    var tonemap = false                                 // HDR → SDR (zscale + tonemap), ricodifica del video
+    var clearTitle = false                              // toglie il titolo dai metadati del contenitore
     var deinterlace = false                            // deinterlacciamento dell'immagine (ricodifica del video)
     var centerDB = 4.0                                 // quanto alzare il canale centrale
     var audioTouched: Set<Int> { normalize.union(boostCenter).union(levelGain).union(toDolby) }
     var trimStart: Double?, trimEnd: Double?          // taglia i primi N secondi / dal secondo N alla fine
-    var changesContent: Bool { !cleanSubs.isEmpty || !dropSubs.isEmpty || !dropAudio.isEmpty || !normalize.isEmpty || !boostCenter.isEmpty || !levelGain.isEmpty || !toDolby.isEmpty || deinterlace || trimStart != nil || trimEnd != nil }
-    var isEmpty: Bool { !changesContent && audioDefault == nil && subDefault == .keep && lang.isEmpty }
+    var changesContent: Bool { !cleanSubs.isEmpty || !dropSubs.isEmpty || !dropAudio.isEmpty || !normalize.isEmpty || !boostCenter.isEmpty || !levelGain.isEmpty || !toDolby.isEmpty || !syncSubs.isEmpty || deinterlace || tonemap || trimStart != nil || trimEnd != nil }
+    var isEmpty: Bool { !changesContent && !clearTitle && audioDefault == nil && subDefault == .keep && lang.isEmpty }
     mutating func merge(_ h: FixHint) {
         switch h {
         case .defaultAudio(let i): audioDefault = i
@@ -28,6 +31,10 @@ struct FixPlan {
         case .levelGain(let i): levelGain.insert(i)
         case .deinterlace: deinterlace = true
         case .toDolby(let i): toDolby.insert(i)
+        case .clearTitle: clearTitle = true
+        case .tonemap: tonemap = true
+        case .setLangTo(let k, let i, let code): lang["\(k)\(i)"] = code
+        case .syncSubs(let i, let a, let b): syncSubs[i] = (a, b)
         }
     }
 }
@@ -71,12 +78,17 @@ func applyFix(_ url: URL, _ plan: FixPlan, progress: @escaping (Double, String) 
     for k in plan.toDolby { guard audio.indices.contains(k), (audio[k]["channels"] as? Int ?? 2) <= 6 else { return FixResult(ok: false, message: "La traccia audio \(k + 1) non può essere convertita in Dolby Digital (più di 6 canali).") } }
     for k in plan.levelGain { guard audio.indices.contains(k), (audio[k]["channels"] as? Int ?? 2) <= 6 else { return FixResult(ok: false, message: "La traccia audio \(k + 1) non può essere regolata (più di 6 canali).") } }
     for k in plan.normalize { guard audio.indices.contains(k), (audio[k]["channels"] as? Int ?? 2) <= 6 else { return FixResult(ok: false, message: "La traccia audio \(k + 1) non può essere livellata (più di 6 canali).") } }
+    if plan.tonemap {
+        guard let v = pr.video, ["smpte2084", "arib-std-b67"].contains((v["color_transfer"] as? String) ?? "") else { return FixResult(ok: false, message: "Il video non è HDR (PQ o HLG): niente da convertire.") }
+        if ((v["side_data_list"] as? [[String: Any]]) ?? []).contains(where: { ($0["side_data_type"] as? String ?? "").contains("DOVI") && (dbl($0["dv_profile"]) ?? 0) == 5 }) { return FixResult(ok: false, message: "Dolby Vision profilo 5: non ha un livello base HDR10, la conversione darebbe colori sbagliati. Serve un'altra sorgente.") }
+    }
     if ext == "avi" && (!plan.cleanSubs.isEmpty || plan.subDefault != .keep) { return FixResult(ok: false, message: "Il formato AVI non può contenere sottotitoli.") }
 
     // 1) solo etichette in un mkv: si modifica l'intestazione sul posto, senza riscrivere il film
     if !plan.changesContent, ext == "mkv", let mp = tool("mkvpropedit") {
         progress(0.1, "Modifica delle etichette…")
         var a = [path]
+        if plan.clearTitle { a += ["--edit", "info", "--delete", "title"] }
         for (i, _) in audio.enumerated() {
             var sets: [String] = []
             if let d = plan.audioDefault { sets += ["flag-default=\(i == d ? 1 : 0)"] }
@@ -94,6 +106,7 @@ func applyFix(_ url: URL, _ plan: FixPlan, progress: @escaping (Double, String) 
         guard let np = Probe(path) else { return FixResult(ok: false, message: "Dopo la modifica il file non è più leggibile: ripristinalo da una copia.") }
         if let d = plan.audioDefault { lines.append("Traccia audio predefinita: \(d + 1)"); if disp(np.audio[d], "default") != 1 { return FixResult(ok: false, message: "La modifica non risulta applicata.") } }
         switch plan.subDefault { case .none: lines.append("Nessun sottotitolo predefinito"); case .track(let k): lines.append("Sottotitoli predefiniti: traccia \(k + 1)"); case .keep: break }
+        if plan.clearTitle { lines.append("Titolo del contenitore tolto") }
         for (k, v) in plan.lang.sorted(by: { $0.key < $1.key }) { lines.append("Lingua \(k.hasPrefix("a") ? "audio" : "sottotitoli") \(Int(k.dropFirst())! + 1): \(langLabel(v))") }
         progress(1, "Fatto"); return FixResult(ok: true, message: "Etichette aggiornate sul posto (nessuna riscrittura del film).", lines: lines)
     }
@@ -117,15 +130,18 @@ func applyFix(_ url: URL, _ plan: FixPlan, progress: @escaping (Double, String) 
     }
     // sottotitoli ripuliti: si riscrive la traccia senza le battute con pubblicità/crediti
     var extra: [Int: Int] = [:]; var inputs: [String] = []
-    for k in plan.cleanSubs.sorted() where subs.indices.contains(k) && !plan.dropSubs.contains(k) {
+    for k in plan.cleanSubs.union(Set(plan.syncSubs.keys)).sorted() where subs.indices.contains(k) && !plan.dropSubs.contains(k) {
         let raw = work.appendingPathComponent("raw\(k).srt"); run(ff, ["-nostdin", "-y", "-v", "error", "-i", path, "-map", "0:s:\(k)", "-f", "srt", raw.path])
         guard let txt = try? String(contentsOf: raw, encoding: .utf8) else { return FixResult(ok: false, message: "Non riesco a leggere i sottotitoli \(k + 1).") }
-        let all = parseSRT(txt); let keep = all.filter { !$0.t.has(adPattern) && $0.e > s0 && $0.s < e0 }
+        let all = parseSRT(txt); let (sa, sb) = plan.syncSubs[k] ?? (1, 0)
+        let moved = all.map { Cue(s: $0.s * sa + sb, e: $0.e * sa + sb, t: $0.t) }
+        let keep = moved.filter { (!plan.cleanSubs.contains(k) || !$0.t.has(adPattern)) && $0.e > s0 && $0.s < e0 }
         func ts(_ x: Double) -> String { let v = max(0, x - s0); let ms = Int((v * 1000).rounded()); return String(format: "%02d:%02d:%02d,%03d", ms / 3_600_000, ms / 60_000 % 60, ms / 1000 % 60, ms % 1000) }
         let out = keep.enumerated().map { "\($0 + 1)\n\(ts($1.s)) --> \(ts($1.e))\n\($1.t)\n" }.joined(separator: "\n")
         let f = work.appendingPathComponent("clean\(k).srt"); try? out.write(to: f, atomically: true, encoding: .utf8)
         inputs += ["-i", f.path]; extra[k] = extra.count + 1
-        lines.append("Sottotitoli \(k + 1): tolte \(all.count - keep.count) battute con pubblicità o crediti")
+        if plan.cleanSubs.contains(k) { lines.append("Sottotitoli \(k + 1): tolte \(all.count - keep.count) battute con pubblicità o crediti") }
+        if plan.syncSubs[k] != nil { lines.append(String(format: "Sottotitoli %d: risincronizzati (tempo × %.5f %+.2f s)", k + 1, sa, sb)) }
     }
     // misure sull'originale: servono per calcolare il guadagno e per controllare dopo che l'audio non sia peggiorato
     var beforeLoud: [Int: (Double, Double, Double)] = [:], beforeDial: [Int: DialogueStats] = [:], gains: [Int: Double] = [:]
@@ -139,12 +155,22 @@ func applyFix(_ url: URL, _ plan: FixPlan, progress: @escaping (Double, String) 
     if s0 > 0 { a += ["-ss", secs(s0)] }
     a += ["-i", path] + inputs
     if e0 < pr.duration { a += ["-t", secs(e0 - s0)] }
-    a += ["-map_chapters", "0", "-map_metadata", "0", "-c", "copy"]   // base: tutto copiato; le opzioni per-traccia che seguono hanno la precedenza
+    a += ["-map_chapters", "0", "-map_metadata", "0", "-c", "copy"]
+    if plan.clearTitle { a += ["-metadata", "title="]; lines.append("Titolo del contenitore tolto") }   // base: tutto copiato; le opzioni per-traccia che seguono hanno la precedenza
     if ext == "mp4" || ext == "m4v" || ext == "mov" { a += ["-c:s", "mov_text", "-movflags", "+faststart"] }
     var vOut = 0, vDone = false
     for s in pr.streams where s["codec_type"] as? String == "video" {
         a += ["-map", "0:\(s["index"] as? Int ?? 0)"]
-        if plan.deinterlace && !vDone && disp(s, "attached_pic") == 0 { a += videoEncodeArgs(s, outIndex: vOut) + ["-filter:v:\(vOut)", deinterlaceFilter]; vDone = true; lines.append("Immagine: deinterlacciata con bwdif e ricodificata (\((s["codec_name"] as? String) == "hevc" ? "x265 CRF 16" : "x264 CRF 14"), stessa profondità colore)") }
+        if (plan.deinterlace || plan.tonemap) && !vDone && disp(s, "attached_pic") == 0 {
+            var chain: [String] = []; var enc = videoEncodeArgs(s, outIndex: vOut)
+            if plan.deinterlace { chain.append(deinterlaceFilter); lines.append("Immagine: deinterlacciata con bwdif") }
+            if plan.tonemap {   // HDR → SDR: linearizzazione con zimg, tone mapping Hable, ritorno a BT.709; l'uscita è SDR a 8 bit
+                chain.append(tonemapFilter(s)); enc = ["-c:v:\(vOut)", "libx264", "-crf", "14", "-preset", "slow", "-pix_fmt", "yuv420p", "-colorspace:v:\(vOut)", "bt709", "-color_primaries:v:\(vOut)", "bt709", "-color_trc:v:\(vOut)", "bt709", "-color_range:v:\(vOut)", "tv"]
+                lines.append("Immagine: convertita da HDR a SDR (zscale + tone mapping Hable, BT.709)")
+            }
+            a += enc + ["-filter:v:\(vOut)", chain.joined(separator: ",")]; vDone = true
+            lines.append("Immagine: ricodificata (\(enc.contains("libx265") ? "x265 CRF 16" : "x264 CRF 14"))")
+        }
         vOut += 1
     }
     var j = 0
@@ -205,7 +231,11 @@ func applyFix(_ url: URL, _ plan: FixPlan, progress: @escaping (Double, String) 
     let before = packetIssues(pr, path), after = packetIssues(np, tmp.path)
     if after > before { return FixResult(ok: false, message: "Il controllo dei flussi ha trovato \(after - before) problemi di audio/video nel nuovo file: l'originale non è stato toccato.") }
     var warn = ""
-    if plan.deinterlace {
+    if plan.tonemap {
+        progress(0.84, "Controllo di qualità dell'immagine…")
+        if let why = tonemapQC(new: tmp.path, duration: pr.duration, lines: &lines) { return FixResult(ok: false, message: "Conversione HDR→SDR annullata: \(why). Il file non è stato toccato.", lines: lines) }
+    }
+    if plan.deinterlace && !plan.tonemap {
         progress(0.84, "Controllo di qualità dell'immagine (VMAF)…")
         if let why = deinterlaceQC(source: path, new: tmp.path, duration: pr.duration, lines: &lines, progress: { progress(0.84 + 0.04 * $0, "Controllo di qualità dell'immagine (VMAF)…") }) {
             return FixResult(ok: false, message: "Correzione dell'immagine annullata: \(why). Il file non è stato toccato.", lines: lines)

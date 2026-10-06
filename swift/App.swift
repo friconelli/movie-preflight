@@ -9,6 +9,6 @@ struct MoviePreflightApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     var body: some Scene {
         WindowGroup("Movie Preflight") { ContentView(store: AppDelegate.store) }
-            .commands { CommandGroup(replacing: .newItem) { Button("Apri film…") { AppDelegate.store.open() }.keyboardShortcut("o") } }
+            .commands { CommandGroup(replacing: .newItem) { Button("Apri film…") { AppDelegate.store.open() }.keyboardShortcut("o"); Divider(); Button("Controlli sul parlato…") { AppDelegate.store.offerSpeechModel() } } }
     }
 }
