@@ -45,7 +45,7 @@ func checkVideo(_ pr: Probe, _ c: Collector) {
         let bpp = br / (Double(w * h) * fps); let modern = ["hevc", "av1", "vp9"].contains(codec)
         if bpp < (modern ? 0.022 : 0.04) { c.add(.warn, "Video", "Bitrate video basso", String(format: "%@ per %dx%d: %.3f bit/pixel, sotto il minimo consigliato (%.3f) per %@. Attese sgranature nelle scene scure e in movimento.", fmtRate(br), w, h, bpp, modern ? 0.022 : 0.04, codec.uppercased())) }
     }
-    if ["tt", "bb", "tb", "bt"].contains(field) { c.add(.warn, "Video", "Video interlacciato", "Il file dichiara scansione interlacciata (\(field)): in proiezione compaiono righe a pettine nei movimenti, serve il deinterlacciamento.") }
+    if ["tt", "bb", "tb", "bt"].contains(field) { c.add(.warn, "Video", "Video interlacciato", "Il file dichiara scansione interlacciata (\(field)): in proiezione compaiono righe a pettine nei movimenti, serve il deinterlacciamento.", fix: [.deinterlace]) }
     if fpsA > 0 && fpsR > 0 && abs(fpsA - fpsR) > fpsR * 0.005 { c.add(.warn, "Video", "Frame rate variabile", String(format: "Dichiarato %.3f ma in media %.3f fps: rischio di scatti e perdita di sincronia.", fpsR, fpsA)) }
     if fps > 0 && !stdFps.contains(where: { abs($0 - fps) < 0.02 }) && !(fpsA > 0 && abs(fpsA - fpsR) > fpsR * 0.005) { c.add(.warn, "Video", "Frame rate insolito", String(format: "%.3f fps: non è uno standard del cinema o della TV, la fluidità può risentirne.", fps)) }
     if trc == "smpte2084" || trc == "arib-std-b67" { c.add(.warn, "Video", trc == "smpte2084" ? "HDR (PQ)" : "HDR (HLG)", "Su un proiettore SDR i colori appaiono spenti e grigi se non c'è la conversione (tone mapping). Verifica il risultato in sala.") }

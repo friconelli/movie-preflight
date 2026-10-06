@@ -63,7 +63,7 @@ func scanVideoWindows(_ pr: Probe, _ path: String, _ c: Collector, progress: @es
     let interl = res.reduce(0) { $0 + $1.interl }, prog = res.reduce(0) { $0 + $1.prog }
     if interl + prog > 100 {
         let pc = Double(interl) / Double(interl + prog)
-        if pc > 0.2 { c.add(.warn, "Video", "Immagine interlacciata", String(format: "Il %.0f%% dei fotogrammi campionati mostra righe a pettine (il file dichiara scansione %@).", pc * 100, (v["field_order"] as? String) ?? "non dichiarata")) }
+        if pc > 0.2 { c.add(.warn, "Video", "Immagine interlacciata", String(format: "Il %.0f%% dei fotogrammi campionati mostra righe a pettine (il file dichiara scansione %@).", pc * 100, (v["field_order"] as? String) ?? "non dichiarata"), fix: [.deinterlace]) }
     }
     // bande nere incorporate
     var crops: [String: Int] = [:]; for r in res { for (k, n) in r.crops { crops[k, default: 0] += n } }

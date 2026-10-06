@@ -27,9 +27,16 @@ struct FixSheet: View {
                     HStack { Text("Traccia predefinita").frame(width: 150, alignment: .leading)
                         Picker("", selection: Binding(get: { plan.audioDefault ?? -1 }, set: { plan.audioDefault = $0 < 0 ? nil : $0 })) { Text("Invariata").tag(-1); ForEach(report.audioTracks) { Text(label($0)).tag($0.ord) } }.labelsHidden() }
                     ForEach(report.audioTracks) { t in trackRow(t, kind: "a") {
-                        Toggle("Livella la dinamica (musica più bassa rispetto ai dialoghi)", isOn: Binding(get: { plan.normalize.contains(t.ord) }, set: { if $0 { plan.normalize.insert(t.ord) } else { plan.normalize.remove(t.ord) } })).disabled(plan.dropAudio.contains(t.ord) || t.channels > 6)
+                        Toggle("Porta il volume a un livello standard (-24 LUFS, guadagno fisso)", isOn: Binding(get: { plan.levelGain.contains(t.ord) }, set: { if $0 { plan.levelGain.insert(t.ord) } else { plan.levelGain.remove(t.ord) } })).disabled(plan.dropAudio.contains(t.ord) || t.channels > 6)
+                        Text("Sale o scende tutto insieme: la dinamica del film non cambia.").font(.caption).foregroundStyle(.secondary).padding(.leading, 20)
+                        DisclosureGroup("Avanzate") {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Toggle("Compressione dinamica", isOn: Binding(get: { plan.normalize.contains(t.ord) }, set: { if $0 { plan.normalize.insert(t.ord) } else { plan.normalize.remove(t.ord) } })).disabled(plan.dropAudio.contains(t.ord) || t.channels > 6)
+                                Text("Può abbassare la musica nelle scene con il parlato e rialzarla dove c'è solo musica. Non è consigliata: se il risultato peggiora, l'app annulla la correzione.").font(.caption).foregroundStyle(.secondary)
+                            }.padding(.top, 2)
+                        }.font(.callout)
                         if t.channels == 6 { Toggle("Alza i dialoghi (canale centrale +4 dB)", isOn: Binding(get: { plan.boostCenter.contains(t.ord) }, set: { if $0 { plan.boostCenter.insert(t.ord) } else { plan.boostCenter.remove(t.ord) } })).disabled(plan.dropAudio.contains(t.ord)) }
-                        Toggle("Elimina questa traccia", isOn: Binding(get: { plan.dropAudio.contains(t.ord) }, set: { if $0 { plan.dropAudio.insert(t.ord); plan.normalize.remove(t.ord); plan.boostCenter.remove(t.ord) } else { plan.dropAudio.remove(t.ord) } })).disabled(report.audioTracks.count < 2)
+                        Toggle("Elimina questa traccia", isOn: Binding(get: { plan.dropAudio.contains(t.ord) }, set: { if $0 { plan.dropAudio.insert(t.ord); plan.normalize.remove(t.ord); plan.boostCenter.remove(t.ord); plan.levelGain.remove(t.ord) } else { plan.dropAudio.remove(t.ord) } })).disabled(report.audioTracks.count < 2)
                     } } } }
                 if !report.subTracks.isEmpty { group("Sottotitoli") {
                     HStack { Text("Predefiniti").frame(width: 150, alignment: .leading)
@@ -39,6 +46,10 @@ struct FixSheet: View {
                         Toggle("Togli le battute con pubblicità e crediti", isOn: Binding(get: { plan.cleanSubs.contains(t.ord) }, set: { if $0 { plan.cleanSubs.insert(t.ord) } else { plan.cleanSubs.remove(t.ord) } })).disabled(t.image || plan.dropSubs.contains(t.ord))
                         Toggle("Elimina questa traccia", isOn: Binding(get: { plan.dropSubs.contains(t.ord) }, set: { if $0 { plan.dropSubs.insert(t.ord); plan.cleanSubs.remove(t.ord) } else { plan.dropSubs.remove(t.ord) } }))
                     } } } }
+                group("Immagine") {
+                    Toggle("Rimuovi l'interlacciamento (bwdif)", isOn: $plan.deinterlace)
+                    Text("Ricodifica l'immagine con codec ad alta qualità: può durare quanto il film. Dopo la scrittura l'app misura la qualità (VMAF) e annulla tutto se l'immagine peggiora.").font(.caption).foregroundStyle(.secondary)
+                }
                 group("Taglio (senza ricodificare l'immagine)") {
                     HStack { Toggle("Togli l'inizio fino a", isOn: $trimS); TextField("secondi", text: $sText).frame(width: 80).textFieldStyle(.roundedBorder).disabled(!trimS); Text("s") }
                     HStack { Toggle("Togli la fine a partire da", isOn: $trimE); TextField("secondi", text: $eText).frame(width: 80).textFieldStyle(.roundedBorder).disabled(!trimE); Text("s (il film dura \(Int(report.duration)) s)") }

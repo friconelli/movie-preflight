@@ -7,9 +7,12 @@ enum SubDefault: Equatable { case keep, none, track(Int) }
 struct FixPlan {
     var audioDefault: Int?; var subDefault: SubDefault = .keep
     var lang: [String: String] = [:]                 // "a0" / "s1" → codice lingua a 3 lettere
-    var cleanSubs: Set<Int> = [], dropSubs: Set<Int> = [], dropAudio: Set<Int> = [], normalize: Set<Int> = [], boostCenter: Set<Int> = []
+    var cleanSubs: Set<Int> = [], dropSubs: Set<Int> = [], dropAudio: Set<Int> = [], normalize: Set<Int> = [], boostCenter: Set<Int> = [], levelGain: Set<Int> = []
+    var deinterlace = false                            // deinterlacciamento dell'immagine (ricodifica del video)
+    var centerDB = 4.0                                 // quanto alzare il canale centrale
+    var audioTouched: Set<Int> { normalize.union(boostCenter).union(levelGain) }
     var trimStart: Double?, trimEnd: Double?          // taglia i primi N secondi / dal secondo N alla fine
-    var changesContent: Bool { !cleanSubs.isEmpty || !dropSubs.isEmpty || !dropAudio.isEmpty || !normalize.isEmpty || !boostCenter.isEmpty || trimStart != nil || trimEnd != nil }
+    var changesContent: Bool { !cleanSubs.isEmpty || !dropSubs.isEmpty || !dropAudio.isEmpty || !normalize.isEmpty || !boostCenter.isEmpty || !levelGain.isEmpty || deinterlace || trimStart != nil || trimEnd != nil }
     var isEmpty: Bool { !changesContent && audioDefault == nil && subDefault == .keep && lang.isEmpty }
     mutating func merge(_ h: FixHint) {
         switch h {
@@ -22,12 +25,16 @@ struct FixPlan {
         case .trimEnd(let t): trimEnd = t
         case .normalize(let i): normalize.insert(i)
         case .boostCenter(let i): boostCenter.insert(i)
+        case .levelGain(let i): levelGain.insert(i)
+        case .deinterlace: deinterlace = true
         }
     }
 }
 struct FixResult { var ok: Bool; var message: String; var lines: [String] = []; var backup: URL? }
 
 /// Filtro validato per "musica troppo forte, dialoghi troppo bassi" (vedi la libreria film): livella la dinamica e limita i picchi.
+/// Livello obiettivo della regolazione a guadagno fisso (cinema/streaming: -24 LUFS integrati).
+let levelTarget = -24.0
 let dynamicsChain = "dynaudnorm=f=500:g=15:p=0.7:m=10,alimiter=limit=0.8:level=false"
 
 /// Misura volume di una traccia audio: (integrato LUFS, LRA LU, picco dBFS).
@@ -60,6 +67,7 @@ func applyFix(_ url: URL, _ plan: FixPlan, progress: @escaping (Double, String) 
     if let d = plan.audioDefault, !audio.indices.contains(d) || plan.dropAudio.contains(d) { return FixResult(ok: false, message: "La traccia audio predefinita scelta non esiste o viene eliminata.") }
     if case .track(let k) = plan.subDefault, !subs.indices.contains(k) || plan.dropSubs.contains(k) { return FixResult(ok: false, message: "La traccia di sottotitoli predefinita scelta non esiste o viene eliminata.") }
     for k in plan.boostCenter { guard audio.indices.contains(k), (audio[k]["channels"] as? Int ?? 2) == 6 else { return FixResult(ok: false, message: "Il canale centrale si può alzare solo nelle tracce 5.1 (traccia \(k + 1)).") } }
+    for k in plan.levelGain { guard audio.indices.contains(k), (audio[k]["channels"] as? Int ?? 2) <= 6 else { return FixResult(ok: false, message: "La traccia audio \(k + 1) non può essere regolata (più di 6 canali).") } }
     for k in plan.normalize { guard audio.indices.contains(k), (audio[k]["channels"] as? Int ?? 2) <= 6 else { return FixResult(ok: false, message: "La traccia audio \(k + 1) non può essere livellata (più di 6 canali).") } }
     if ext == "avi" && (!plan.cleanSubs.isEmpty || plan.subDefault != .keep) { return FixResult(ok: false, message: "Il formato AVI non può contenere sottotitoli.") }
 
@@ -117,27 +125,43 @@ func applyFix(_ url: URL, _ plan: FixPlan, progress: @escaping (Double, String) 
         inputs += ["-i", f.path]; extra[k] = extra.count + 1
         lines.append("Sottotitoli \(k + 1): tolte \(all.count - keep.count) battute con pubblicità o crediti")
     }
+    // misure sull'originale: servono per calcolare il guadagno e per controllare dopo che l'audio non sia peggiorato
+    var beforeLoud: [Int: (Double, Double, Double)] = [:], beforeDial: [Int: DialogueStats] = [:], gains: [Int: Double] = [:]
+    for k in plan.audioTouched.sorted() {
+        progress(0.03, "Misura dell'audio originale (traccia \(k + 1))…")
+        if let l = measureLoudness(path, k) { beforeLoud[k] = l; if plan.levelGain.contains(k) { gains[k] = max(-15, min(18, levelTarget - l.0)) } }
+        if (audio[k]["channels"] as? Int ?? 0) == 6, let d = dialogueStats(path, k) { beforeDial[k] = d }
+    }
+    for k in plan.levelGain where gains[k] == nil { return FixResult(ok: false, message: "Non riesco a misurare il volume della traccia audio \(k + 1).") }
     var a = ["-nostdin", "-y", "-v", "error", "-progress", "pipe:2", "-nostats"]
     if s0 > 0 { a += ["-ss", secs(s0)] }
     a += ["-i", path] + inputs
     if e0 < pr.duration { a += ["-t", secs(e0 - s0)] }
     a += ["-map_chapters", "0", "-map_metadata", "0", "-c", "copy"]   // base: tutto copiato; le opzioni per-traccia che seguono hanno la precedenza
     if ext == "mp4" || ext == "m4v" || ext == "mov" { a += ["-c:s", "mov_text", "-movflags", "+faststart"] }
-    for s in pr.streams where s["codec_type"] as? String == "video" { a += ["-map", "0:\(s["index"] as? Int ?? 0)"] }
+    var vOut = 0, vDone = false
+    for s in pr.streams where s["codec_type"] as? String == "video" {
+        a += ["-map", "0:\(s["index"] as? Int ?? 0)"]
+        if plan.deinterlace && !vDone && disp(s, "attached_pic") == 0 { a += videoEncodeArgs(s, outIndex: vOut) + ["-filter:v:\(vOut)", deinterlaceFilter]; vDone = true; lines.append("Immagine: deinterlacciata con bwdif e ricodificata (\((s["codec_name"] as? String) == "hevc" ? "x265 CRF 16" : "x264 CRF 14"), stessa profondità colore)") }
+        vOut += 1
+    }
     var j = 0
     for (i, s) in audio.enumerated() where !plan.dropAudio.contains(i) {
         a += ["-map", "0:a:\(i)"]
         if let l = plan.lang["a\(i)"] { a += ["-metadata:s:a:\(j)", "language=\(l)"] }
         if let d = plan.audioDefault { a += ["-disposition:a:\(j)", i == d ? "default" : "0"] }
-        if plan.normalize.contains(i) || plan.boostCenter.contains(i) {
+        if plan.audioTouched.contains(i) {
             let br = min(dbl(s["bit_rate"]) ?? dbl(tags(s)["bps"]) ?? 448_000, 640_000)
             var chain: [String] = []
-            if plan.boostCenter.contains(i) {   // +4 dB solo al canale centrale (i dialoghi), gli altri invariati; il limitatore evita il clipping
-                let lay = (s["channel_layout"] as? String) ?? "5.1"
-                chain.append("pan=\(lay)|c0=c0|c1=c1|c2=1.585*c2|c3=c3|c4=c4|c5=c5,alimiter=limit=0.9:level=false")
-                lines.append("Audio \(i + 1): canale centrale (dialoghi) alzato di 4 dB")
+            if let g = gains[i] {   // guadagno fisso: nessun effetto sulla dinamica, il limitatore evita solo il clipping
+                chain.append(String(format: "volume=%.2fdB,alimiter=limit=0.95:level=false", g)); lines.append(String(format: "Audio %d: volume portato a %.0f LUFS con un guadagno fisso di %+.1f dB", i + 1, levelTarget, g))
             }
-            if plan.normalize.contains(i) { chain.append(dynamicsChain); lines.append("Audio \(i + 1): dinamica livellata (\(dynamicsChain.split(separator: ",")[0]) + limitatore)") }
+            if plan.boostCenter.contains(i) {   // solo il canale centrale (i dialoghi), gli altri invariati; il limitatore evita il clipping
+                let lay = (s["channel_layout"] as? String) ?? "5.1"
+                chain.append(String(format: "pan=%@|c0=c0|c1=c1|c2=%.3f*c2|c3=c3|c4=c4|c5=c5,alimiter=limit=0.9:level=false", lay, pow(10, plan.centerDB / 20)))
+                lines.append(String(format: "Audio %d: canale centrale (dialoghi) alzato di %.1f dB", i + 1, plan.centerDB))
+            }
+            if plan.normalize.contains(i) { chain.append(dynamicsChain); lines.append("Audio \(i + 1): compressione dinamica (\(dynamicsChain.split(separator: ",")[0]) + limitatore)") }
             a += ["-c:a:\(j)", "ac3", "-b:a:\(j)", "\(Int(max(br, 192_000)))", "-filter:a:\(j)", chain.joined(separator: ",")]
             lines.append("Audio \(i + 1): ricodificata in AC3")
         }
@@ -177,16 +201,31 @@ func applyFix(_ url: URL, _ plan: FixPlan, progress: @escaping (Double, String) 
     let before = packetIssues(pr, path), after = packetIssues(np, tmp.path)
     if after > before { return FixResult(ok: false, message: "Il controllo dei flussi ha trovato \(after - before) problemi di audio/video nel nuovo file: l'originale non è stato toccato.") }
     var warn = ""
-    for k in plan.normalize.union(plan.boostCenter).sorted() {
+    if plan.deinterlace {
+        progress(0.84, "Controllo di qualità dell'immagine (VMAF)…")
+        if let why = deinterlaceQC(source: path, new: tmp.path, duration: pr.duration, lines: &lines, progress: { progress(0.84 + 0.04 * $0, "Controllo di qualità dell'immagine (VMAF)…") }) {
+            return FixResult(ok: false, message: "Correzione dell'immagine annullata: \(why). Il file non è stato toccato.", lines: lines)
+        }
+    }
+    for k in plan.audioTouched.sorted() {
         let outOrd = (0..<k).filter { !plan.dropAudio.contains($0) }.count
-        progress(0.85 + 0.1 * Double(outOrd) / Double(max(1, plan.normalize.count)), "Misura del volume (traccia \(k + 1))…")
-        if let b = measureLoudness(path, k), let af = measureLoudness(tmp.path, outOrd) {
-            lines.append("Audio \(k + 1) prima: \(lufs(b))"); lines.append("Audio \(k + 1) dopo:  \(lufs(af))")
-            if af.2 > -0.1 { warn = " Attenzione: il picco dopo la correzione è molto alto." }
+        progress(0.85 + 0.1 * Double(outOrd) / Double(max(1, plan.audioTouched.count)), "Controllo del risultato (traccia \(k + 1))…")
+        guard let b = beforeLoud[k], let af = measureLoudness(tmp.path, outOrd) else { return FixResult(ok: false, message: "Non riesco a misurare l'audio dopo la correzione: l'originale non è stato toccato.") }
+        lines.append("Audio \(k + 1) prima: \(lufs(b))"); lines.append("Audio \(k + 1) dopo:  \(lufs(af))")
+        // regola di fondo: meglio non toccare l'audio che peggiorarlo
+        func reject(_ why: String) -> FixResult { FixResult(ok: false, message: "Correzione audio annullata: \(why). Il file non è stato toccato.", lines: lines) }
+        if af.2 > 0.0 { return reject("avrebbe causato distorsione (picco a \(String(format: "%+.1f", af.2)) dBFS)") }
+        if plan.levelGain.contains(k), abs(af.0 - levelTarget) > 2.5 { return reject(String(format: "il volume ottenuto (%.1f LUFS) è lontano dall'obiettivo (%.0f)", af.0, levelTarget)) }
+        if let bd = beforeDial[k] {
+            guard let ad = dialogueStats(tmp.path, outOrd) else { return reject("non riesco a misurare i dialoghi dopo la correzione") }
+            lines.append(String(format: "Audio %d musica sopra i dialoghi (>6 LU) prima: %.0f%% dei momenti con parlato — dopo: %.0f%%", k + 1, bd.coveredPct, ad.coveredPct))
+            if ad.coveredPct > bd.coveredPct + 1.5 || ad.covered10Pct > bd.covered10Pct + 1.0 {
+                return reject(String(format: "la musica sarebbe risultata più forte rispetto ai dialoghi (dal %.0f%% al %.0f%% dei momenti con parlato)", bd.coveredPct, ad.coveredPct))
+            }
+        } else if plan.normalize.contains(k), af.1 > b.1 + 0.5 {
+            return reject(String(format: "l'escursione dinamica sarebbe aumentata (da %.1f a %.1f LU)", b.1, af.1))
         }
-        if plan.boostCenter.contains(k), let b = dialogueStats(path, k), let af = dialogueStats(tmp.path, outOrd) {
-            lines.append(String(format: "Audio %d musica sopra i dialoghi (>6 LU) prima: %.0f%% dei momenti con parlato — dopo: %.0f%%", k + 1, b.coveredPct, af.coveredPct))
-        }
+        if af.2 > -0.1 { warn = " Attenzione: il picco dopo la correzione è molto alto." }
     }
     // sostituzione: l'originale diventa .orig_backup (se si è toccato il contenuto) oppure va nel Cestino (solo etichette)
     progress(0.97, "Sostituzione del file…")

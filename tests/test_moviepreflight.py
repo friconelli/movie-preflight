@@ -104,6 +104,12 @@ try:
     f = two("fix4.mkv"); rc, o = fix(f, "--drop-audio", "0", "--drop-audio", "1"); check(rc != 0 and len(tracks(f, "audio")) == 2, "non si eliminano tutte le tracce audio")
     rc, o = fix(f, "--audio-default", "5"); check(rc != 0, "traccia predefinita inesistente rifiutata")
     rc, o = fix(f, "--trim-start", "100000"); check(rc != 0 and not os.path.exists(f.replace(".mkv", ".orig_backup.mkv")), "taglio impossibile: nessuna modifica")
+    print("== deinterlacciamento")
+    il = os.path.join(T, "interl.mkv")
+    ff("-f", "lavfi", "-i", "mandelbrot=s=640x360:r=25", "-f", "lavfi", "-i", "sine=d=200", "-t", "200", "-map", "0:v", "-map", "1:a", "-vf", "interlace=scan=tff", "-c:v", "libx264", "-preset", "ultrafast", "-flags", "+ilme+ildct", "-b:v", "6M", "-c:a", "aac", il)
+    rc, o = fix(il, "--deinterlace"); np = probe(il) if rc == 0 else {}
+    check(rc == 0 and "VMAF" in o and os.path.exists(il.replace(".mkv", ".orig_backup.mkv")), "deinterlacciamento riuscito con controllo VMAF e backup")
+    check(rc == 0 and tracks(il, "video")[0]["codec_name"] == "h264" and tracks(il, "audio")[0]["codec_name"] == "aac", "audio copiato, video ricodificato nello stesso codec")
     print("== dialoghi 5.1")
     f51 = os.path.join(T, "surround.mkv")
     ff("-f", "lavfi", "-i", f"testsrc2=s=640x360:r=25:d={D}", "-f", "lavfi", "-i", f"sine=f=300:d={D}", "-filter_complex", "[1]pan=5.1|FL=2.0*c0|FR=2.0*c0|FC=0.8*c0|LFE=0*c0|BL=0*c0|BR=0*c0[a]",
@@ -113,6 +119,14 @@ try:
     m = re.search(r"prima: (\d+)% .* dopo: (\d+)%", o)
     check(rc == 0 and m is not None and int(m.group(1)) > 80 and int(m.group(2)) < int(m.group(1)) - 50, f"canale centrale alzato: musica sopra i dialoghi {m.group(1) if m else '?'}% → {m.group(2) if m else '?'}%")
     rc, o = fix(os.path.join(T, "pulito.mkv"), "--boost-center", "0"); check(rc != 0, "alzare il centro su una traccia non 5.1 è rifiutato")
+    print("== controllo di non-peggioramento")
+    fb = os.path.join(T, "surround_ok.mkv")   # centro e fronte vicini (~4 dB): abbassare il centro lo farebbe coprire dalla musica
+    ff("-f", "lavfi", "-i", f"testsrc2=s=640x360:r=25:d={D}", "-f", "lavfi", "-i", f"sine=f=300:d={D}", "-filter_complex", "[1]pan=5.1|FL=2.0*c0|FR=2.0*c0|FC=1.3*c0|LFE=0*c0|BL=0*c0|BR=0*c0[a]",
+       "-map", "0:v", "-map", "[a]", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "ac3", fb)
+    before_size = os.path.getsize(fb); rc, o = fix(fb, "--boost-center", "0", "--boost-db", "-6")
+    check(rc != 0 and "annullata" in o and os.path.getsize(fb) == before_size and not os.path.exists(fb.replace(".mkv", ".orig_backup.mkv")), "correzione che peggiora i dialoghi: annullata, file intatto, nessun backup")
+    pl = os.path.join(T, "pulito.mkv"); rc, o = fix(pl, "--level", "0"); m = re.search(r"dopo:\s+(-?[\d.]+) LUFS", o)
+    check(rc == 0 and m is not None and abs(float(m.group(1)) + 24) < 2.5 and "guadagno fisso" in o, f"volume portato a -24 LUFS con guadagno fisso ({m.group(1) if m else '?'} LUFS)")
 finally:
     shutil.rmtree(T, ignore_errors=True)
 print(f"\n{ok} controlli ok, {bad} falliti"); sys.exit(1 if bad else 0)

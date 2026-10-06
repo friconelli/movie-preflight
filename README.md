@@ -15,14 +15,21 @@ Dalle segnalazioni (pulsante «Correggi…») o dal pulsante in alto si apre una
 - **togliere pubblicità e crediti** dai sottotitoli, **eliminare** tracce audio/sottotitoli;
 - **tagliare** l'inizio o la fine (crediti del torrent nell'immagine) senza ricodificare, sui fotogrammi chiave;
 - **alzare i dialoghi** (canale centrale +4 dB con limitatore) nei 5.1 dove la musica li copre;
-- **livellare la dinamica** di una traccia audio (`dynaudnorm` + `alimiter`, AC3), con misura prima/dopo.
+- **portare il volume a un livello standard** (-24 LUFS) con un **guadagno fisso**: sale o scende tutto insieme, la dinamica non cambia;
+- **deinterlacciare l'immagine** (`bwdif`, ricodifica x264/x265 ad alta qualità nello stesso codec e profondità colore);
+- (avanzata, sconsigliata) **compressione dinamica** `dynaudnorm`+`alimiter`: può abbassare la musica sotto il parlato e rialzarla dove c'è solo musica.
+
+**Principio: meglio non toccare un file che peggiorarlo.** Solo strumenti standard del settore (ffmpeg: `bwdif`, `loudnorm`-style gain fisso, `alimiter`, `libvmaf`; mkvtoolnix) e ogni correzione di audio/immagine viene misurata prima e dopo; se non migliora, viene annullata e il file resta com'è:
+- audio: nessuna distorsione (picco ≤ 0 dBFS), livello obiettivo raggiunto, nei 5.1 la «musica sopra i dialoghi» non deve aumentare di oltre 1,5 punti, la dinamica non deve crescere con la compressione;
+- immagine: l'interlacciamento deve sparire e il **VMAF** (Netflix) su 3 tratti deve restare ≥ 93 (minimo ≥ 88) rispetto al deinterlacciato ideale.
+Non offerti perché con questo ffmpeg non sarebbero di livello professionale: conversione HDR→SDR (mancano `zscale`/`libplacebo`) e ingrandimento con IA (Topaz Video AI non installato).
 
 Sicurezza: solo etichette in un mkv → modifica sul posto con mkvpropedit, senza riscrivere il film. Ogni altra correzione scrive un file temporaneo, lo **verifica** (numero di tracce, durata, buchi nell'audio rispetto all'originale) e solo allora sostituisce; l'originale resta come `<nome>.orig_backup.<ext>` e «Annulla la correzione» lo rimette. Da riga di comando: `dist/moviepreflight --fix film.mkv --audio-default 1 --sub-default none --lang s1=fra --clean-sub 0 --trim-start 4 --normalize 0` (numeri da 0).
 
 ## Uso
     ./build.sh                       # dist/Movie Preflight.app (+ dist/moviepreflight per la riga di comando)
     dist/moviepreflight --analyze film.mkv # rapporto testuale
-    python3 tests/test_moviepreflight.py   # 38 controlli su film sintetici con difetti noti
+    python3 tests/test_moviepreflight.py   # 42 controlli su film sintetici con difetti noti
 
 ffmpeg e ffprobe vengono copiati dentro l'app dallo script `tools/bundle_ffmpeg.py` (con le loro librerie, percorsi riscritti: funziona anche senza Homebrew; `BUNDLE_FFMPEG=0 ./build.sh` per saltare e usare quelli di /opt/homebrew/bin). Per distribuire l'app pubblicamente tieni conto della licenza di ffmpeg (la build di Homebrew include componenti GPL). Solo Apple Silicon (arm64), macOS 13+. Non modifica mai i file analizzati.
 
