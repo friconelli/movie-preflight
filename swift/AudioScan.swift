@@ -34,7 +34,7 @@ func scanAudio(_ pr: Probe, _ path: String, _ k: Int, _ c: Collector, progress: 
     if I < -70 || vals.count < 10 { c.add(.error, ar, "Audio quasi muto — \(n)", "Livello medio \(String(format: "%.0f", I)) LUFS: la traccia sembra vuota."); return }
     if I < -32 { c.add(.warn, ar, "Audio molto basso — \(n)", String(format: "Volume medio %.1f LUFS: in sala servirà alzare molto il volume e il rumore di fondo salirà.", I), fix: [.levelGain(k)]) }
     else if I > -16 { c.add(.warn, ar, "Audio molto alto e compresso — \(n)", String(format: "Volume medio %.1f LUFS: tipico di un master per la TV, poca dinamica e rischio di distorsione.", I), fix: [.levelGain(k)]) }
-    if let p = peak, p > -0.1 { c.add(.warn, ar, "Picchi a 0 dB — \(n)", String(format: "Il picco arriva a %.1f dBFS: possibile distorsione (clipping) nei passaggi forti.", p)) }
+    if let p = peak, p > -0.1 { c.add(.warn, ar, "Picchi a 0 dB — \(n)", String(format: "Il picco arriva a %.1f dBFS: possibile distorsione (clipping) nei passaggi forti.", p), fix: [.levelGain(k)]) }
     if let r = lra, r > 26 { c.add(.warn, ar, "Dinamica molto ampia — \(n)", String(format: "Escursione di %.0f LU: il divario tra parti sommesse e forti è grande, in sala i dialoghi possono sembrare bassi rispetto alla musica.", r), fix: dynHint) }
     // salti bruschi: media dei 8 s dopo contro i 8 s prima, sui secondi con suono
     let maxT = Int(lastT); var jumps: [(Int, Double)] = []

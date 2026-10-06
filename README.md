@@ -2,12 +2,18 @@
 
 App Mac (Swift/SwiftUI, come Dolly) che controlla un film prima della proiezione: si trascina un mp4/mkv/avi (o più file, o una cartella) e restituisce dati tecnici e segnalazioni su immagine, audio e sottotitoli.
 
+## Interfaccia
+Una scheda per film: locandina, titolo, anno, regia e durata (da Wikidata/Wikipedia, solo dopo il consenso), il verdetto e l'elenco **«Da sistemare»**: ogni problema ha un solo pulsante con l'azione chiara («Ripara gli accenti», «Togli la pubblicità», «Converti in Dolby»…) che mostra prima il riepilogo e chiede conferma; **«Correggi tutto»** raggruppa le correzioni sicure (esclude eliminazioni di tracce e ricodifiche lunghe). Le note e i dati tecnici sono chiusi, le opzioni avanzate stanno in «Correggi a mano…» (menu ⋯).
+
+## Dati del film online (opzionale)
+Titolo e anno si ricavano dal nome del file («Titolo (Anno - Regista).mkv» o «Titolo.Anno.1080p…»); con il consenso, l'app interroga **Wikidata** (CC0) e **Wikipedia** (testi CC BY-SA; le locandine sono mostrate solo nell'app, non redistribuite) inviando solo titolo e anno: ne ricava regia, durata attesa, lingua originale, locandina e descrizione. Usi: confronto della durata (film tagliato o incompleto), avviso se manca l'audio in lingua originale, nome del file secondo la convenzione «Titolo (Anno - Regista)» con correzione «Rinomina il file». Da riga di comando: `--online` e `--meta FILE`.
+
 ## Cosa controlla
 - **Contenitore**: estensione/contenuto, durata, titolo nei metadati con pubblicità, capitoli, file troncato.
 - **Video**: risoluzione, bitrate per pixel, frame rate (variabile/insolito), interlacciamento (dichiarato e rilevato), HDR, colore non dichiarato, bande nere incorporate, neri iniziali/finali/centrali, fermi immagine, errori di decodifica, buchi nel flusso, keyframe.
 - **Immagine**: OCR (Vision) sui primi 45 s e sugli ultimi 150 s per trovare scritte/crediti del torrent.
 - **Audio** (per le prime 3 tracce; nei 5.1 anche **dialoghi contro musica**: confronto tra il canale centrale e il fronte sinistro/destro nei momenti con parlato): volume integrato, LRA, picchi, salti bruschi di volume, parti sommesse/forti rispetto al livello tipico, silenzi, buchi nei pacchetti, sincronia audio/video, lingua mancante, predefinite ambigue.
-- **Sottotitoli**: lingua reale delle battute contro quella dichiarata (NaturalLanguage), crediti/pubblicità, battute sovrapposte o troppo veloci, caratteri rovinati, durata rispetto al film, predefiniti/forzati incoerenti, formato a immagine.
+- **Sottotitoli**: **caratteri rovinati** (doppia codifica UTF-8→Windows-1252: «SÃ¬» invece di «Sì»; rilevazione che distingue «Ã» da «ã» portoghese) con riparazione, lingua reale delle battute contro quella dichiarata (NaturalLanguage), crediti/pubblicità, battute sovrapposte o troppo veloci, caratteri rovinati, durata rispetto al film, predefiniti/forzati incoerenti, formato a immagine.
 
 ## Strumenti open source inclusi
 Tutto dentro l'app, senza Homebrew (vedi `THIRD_PARTY_NOTICES.md` e `LICENSE`, GPL-3.0):
@@ -22,6 +28,7 @@ Dalle segnalazioni (pulsante «Correggi…») o dal pulsante in alto si apre una
 - **togliere pubblicità e crediti** dai sottotitoli, **eliminare** tracce audio/sottotitoli;
 - **tagliare** l'inizio o la fine (crediti del torrent nell'immagine) senza ricodificare, sui fotogrammi chiave;
 - **alzare i dialoghi** (canale centrale +4 dB con limitatore) nei 5.1 dove la musica li copre;
+- **riparare gli accenti rovinati** dei sottotitoli (ogni battuta riletta come Windows-1252 e rimessa in UTF-8; se restano oltre il 10% di battute rovinate l'operazione è annullata), **impostare o togliere l'etichetta «forzati»**, **rinominare il file**;
 - **risincronizzare i sottotitoli** (spostamento fisso o allungamento per frame rate diverso), **correggere la lingua** di una traccia audio dopo il riconoscimento del parlato, **togliere il titolo** dal contenitore (sigle di gruppi di rilascio);
 - **convertire HDR in SDR** (`zscale` + tone mapping Hable, solo se non è Dolby Vision profilo 5), con controllo di luminanza e tag BT.709;
 - **convertire in Dolby Digital (AC-3)** le tracce che non sono Dolby (fino a 5.1; 640 kb/s per il 5.1, 384 per lo stereo), con controllo che il volume non cambi;
@@ -39,7 +46,7 @@ Sicurezza: solo etichette in un mkv → modifica sul posto con mkvpropedit, senz
 ## Uso
     ./build.sh                       # dist/Movie Preflight.app (+ dist/moviepreflight per la riga di comando)
     dist/moviepreflight --analyze film.mkv # rapporto testuale
-    python3 tests/test_moviepreflight.py   # 56 controlli su film sintetici con difetti noti
+    python3 tests/test_moviepreflight.py   # 65 controlli su film sintetici con difetti noti
 
 Gli strumenti vengono copiati dentro l'app da `tools/bundle_tools.py` (`BUNDLE_FFMPEG=0 ./build.sh` per saltare e usare quelli di /opt/homebrew/bin). Per distribuire l'app pubblicamente tieni conto della licenza di ffmpeg (la build di Homebrew include componenti GPL). Solo Apple Silicon (arm64), macOS 13+. Non modifica mai i file analizzati.
 

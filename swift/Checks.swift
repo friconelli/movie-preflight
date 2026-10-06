@@ -17,7 +17,7 @@ func checkContainer(_ pr: Probe, _ url: URL, _ c: Collector) {
     if !["mp4", "mkv", "avi", "m4v", "mov"].contains(ext) { c.add(.info, "File", "Formato insolito (.\(ext))", "Pensato per mp4, mkv, avi.") }
     if pr.video == nil { c.add(.error, "Video", "Nessuna traccia video", "Il file non contiene immagini.") }
     if d > 0 && d < 60 { c.add(.warn, "File", "Durata molto breve", "Il file dura solo \(hms(d)).") }
-    if let t = ft["title"], t.has(adPattern) { c.add(.warn, "File", "Il titolo nei metadati contiene pubblicità", "«\(t)» — compare in alcuni lettori.") }
+    if let t = ft["title"], t.has(adPattern) { c.add(.warn, "File", "Il titolo nei metadati contiene pubblicità", "«\(t)» — compare in alcuni lettori.", fix: [.clearTitle]) }
     if let t = ft["comment"] ?? ft["description"], t.has(adPattern) { c.add(.info, "File", "Commento dei metadati con pubblicità", "«\(String(t.prefix(120)))»") }
     if ext == "avi", let cn = pr.video?["codec_name"] as? String, ["h264", "hevc"].contains(cn) { c.add(.info, "File", "H.264/HEVC dentro AVI", "Il contenitore AVI gestisce male il flusso moderno: possibili scatti nella ricerca e nella sincronia.") }
     if let n = Optional(pr.of("video").count + pr.streams.filter { disp($0, "attached_pic") == 1 }.count), n > 1 { c.add(.info, "File", "Più flussi video o copertina incorporata", "\(n) flussi: viene riprodotto il primo.") }
@@ -105,7 +105,7 @@ func checkSubStreams(_ pr: Probe, _ c: Collector) {
         if lang(s).isEmpty { c.add(.warn, "Sottotitoli", "Lingua non indicata — \(n)", "Impossibile sceglierli in automatico.", fix: [.setLang("s", i)]) }
         if disp(s, "default") == 1 && !forced { c.add(.warn, "Sottotitoli", "Sottotitoli attivi di default — \(n)", "Compaiono da soli all'avvio: in sala potrebbero apparire senza volerlo.", fix: [.defaultSub(nil)]) }
         if imageSubs.contains(codec) { c.add(.info, "Sottotitoli", "Sottotitoli a immagine — \(n)", "Formato \(codec): non si possono controllare nel testo né cambiare dimensione/colore.") }
-        if let t = tg["title"]?.lowercased(), (t.contains("forced") || t.contains("forzat")) && !forced { c.add(.warn, "Sottotitoli", "Si chiamano «forzati» ma non sono marcati come tali — \(n)", "Il lettore li tratterà come sottotitoli completi.") }
+        if let t = tg["title"]?.lowercased(), (t.contains("forced") || t.contains("forzat")) && !forced { c.add(.warn, "Sottotitoli", "Si chiamano «forzati» ma non sono marcati come tali — \(n)", "Il lettore li tratterà come sottotitoli completi.", fix: [.setForced(i, true)]) }
     }
     let keys = ss.map { lang($0) + ($0["disposition"].flatMap { ($0 as? [String: Any])?["forced"] as? Int } == 1 ? "F" : "") + (tags($0)["title"] ?? "") }
     if Set(keys).count < keys.count { c.add(.info, "Sottotitoli", "Tracce di sottotitoli duplicate", "Due tracce con stessa lingua, tipo e nome.") }

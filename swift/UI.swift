@@ -3,7 +3,7 @@ import UniformTypeIdentifiers
 import AppKit
 
 final class Job: ObservableObject, Identifiable {
-    let id = UUID(); let url: URL
+    let id = UUID(); @Published var url: URL
     @Published var progress = 0.0; @Published var stage = "In coda"; @Published var report: Report?
     @Published var fixProgress: Double?; @Published var fixStage = ""; @Published var fixResult: FixResult?
     init(_ u: URL) { url = u }
@@ -17,7 +17,8 @@ final class Store: ObservableObject {
             var d: ObjCBool = false; FileManager.default.fileExists(atPath: u.path, isDirectory: &d)
             if d.boolValue { return ((try? FileManager.default.contentsOfDirectory(at: u, includingPropertiesForKeys: nil)) ?? []).sorted { $0.path < $1.path } }; return [u] }
             .filter { Store.exts.contains($0.pathExtension.lowercased()) }
-        if !files.isEmpty && whisperModelPath() == nil && tool("whisper-cli") != nil && !UserDefaults.standard.bool(forKey: "speechOfferAsked") { UserDefaults.standard.set(true, forKey: "speechOfferAsked"); offerSpeechModel() }
+        if !files.isEmpty { askOnline() }
+        if !files.isEmpty && whisperModelPath() == nil && tool("whisper-cli") != nil && !UserDefaults.standard.bool(forKey: "speechOfferAsked") && ProcessInfo.processInfo.environment["MOVIEPREFLIGHT_NOPROMPT"] == nil { UserDefaults.standard.set(true, forKey: "speechOfferAsked"); offerSpeechModel() }
         for u in files { let j = Job(u); jobs.append(j); selection = j.id; startAnalysis(j) }
     }
     func startAnalysis(_ j: Job) {
@@ -48,12 +49,33 @@ final class Store: ObservableObject {
     }
     /// Applica una correzione (una per volta, dopo l'analisi in corso) e poi rianalizza il film per mostrare l'effetto.
     func fix(_ j: Job, _ plan: FixPlan) {
+        var p = plan; let newBase = p.rename; p.rename = nil
         j.fixProgress = 0; j.fixStage = "In attesa…"; j.fixResult = nil
         q.async {
-            let r = applyFix(j.url, plan) { p, s in DispatchQueue.main.async { j.fixProgress = p; j.fixStage = s } }
-            let rep = r.ok ? analyze(j.url) : nil
-            DispatchQueue.main.async { j.fixResult = r; j.fixProgress = nil; if let rep = rep { j.report = rep } }
+            var r = p.isEmpty ? FixResult(ok: true, message: "") : applyFix(j.url, p) { v, s in DispatchQueue.main.async { j.fixProgress = v; j.fixStage = s } }
+            if r.ok, let nb = newBase { let rr = renameFile(j.url, to: nb); r = FixResult(ok: rr.ok, message: (r.message.isEmpty ? "" : r.message + " ") + rr.message, lines: r.lines, backup: r.backup, newURL: rr.newURL) }
+            let target = r.newURL ?? j.url
+            let rep = r.ok ? analyze(target) : nil
+            DispatchQueue.main.async { if let u = r.newURL { j.url = u }; j.fixResult = r; j.fixProgress = nil; if let rep = rep { j.report = rep } }
         }
+    }
+    /// Mostra tutto quello che verrà fatto e applica solo dopo il consenso (Correggi / Altre opzioni… / Annulla).
+    func confirmFix(_ j: Job, _ plan: FixPlan, more: @escaping () -> Void) {
+        guard let rep = j.report else { return }
+        let lines = plan.summary(rep); guard !lines.isEmpty else { return }
+        let a = NSAlert(); a.messageText = lines.count == 1 ? "Correggere questo?" : "Correggere queste cose?"
+        a.informativeText = lines.map { "• " + $0 }.joined(separator: "\n") + "\n\n" + (plan.changesContent ? "L'originale resta nella stessa cartella come «\(backupURL(for: j.url).lastPathComponent)» e potrai annullare." : "Cambiano solo etichette o nome del file: nessuna riscrittura del film.")
+        a.addButton(withTitle: "Correggi"); a.addButton(withTitle: "Altre opzioni…"); a.addButton(withTitle: "Annulla")
+        switch a.runModal() { case .alertFirstButtonReturn: fix(j, plan); case .alertSecondButtonReturn: more(); default: break }
+    }
+    /// Consenso alle ricerche online (solo il titolo ricavato dal nome del file viene inviato a Wikidata e Wikipedia).
+    func askOnline(force: Bool = false) {
+        if ProcessInfo.processInfo.environment["MOVIEPREFLIGHT_NOPROMPT"] != nil { onlineLookups = ProcessInfo.processInfo.environment["MOVIEPREFLIGHT_ONLINE"] != nil; return }   // solo per le prove a vista
+        if !force && UserDefaults.standard.object(forKey: "metaConsent") != nil { return }
+        let a = NSAlert(); a.messageText = "Cercare i dati del film online?"
+        a.informativeText = "Movie Preflight può trovare titolo, anno, regista, durata, locandina e descrizione su Wikidata e Wikipedia (servizi liberi, nessuna chiave). Per farlo invia soltanto il titolo e l'anno ricavati dal nome del file: i film non vengono mai inviati. Servono per confrontare la durata, suggerire il nome del file e mostrare la scheda del film."
+        a.addButton(withTitle: UserDefaults.standard.bool(forKey: "metaConsent") ? "Lascia attivo" : "Consenti"); a.addButton(withTitle: UserDefaults.standard.bool(forKey: "metaConsent") ? "Disattiva" : "Non ora")
+        let yes = a.runModal() == .alertFirstButtonReturn; UserDefaults.standard.set(yes, forKey: "metaConsent"); onlineLookups = yes
     }
     /// Annulla l'ultima correzione: il file corrente va nel Cestino e torna l'originale conservato.
     func restore(_ j: Job) {
@@ -66,6 +88,7 @@ final class Store: ObservableObject {
             DispatchQueue.main.async { j.fixResult = msg; j.fixProgress = nil; j.report = rep }
         }
     }
+    init() { onlineLookups = UserDefaults.standard.bool(forKey: "metaConsent") }
     func open() { let p = NSOpenPanel(); p.allowsMultipleSelection = true; p.canChooseDirectories = true; p.message = "Scegli uno o più film"; if p.runModal() == .OK { add(p.urls) } }
 }
 
@@ -113,82 +136,12 @@ struct JobRow: View {
         HStack(spacing: 8) {
             if let r = job.report { Image(systemName: r.worst.symbol).foregroundStyle(r.worst.color) } else { ProgressView().controlSize(.small) }
             VStack(alignment: .leading, spacing: 1) {
-                Text(job.url.deletingPathExtension().lastPathComponent).lineLimit(2).font(.callout)
+                Text(job.report?.meta?.title ?? job.url.deletingPathExtension().lastPathComponent).lineLimit(2).font(.callout)
                 Text(job.report?.verdict ?? job.stage).font(.caption).foregroundStyle(.secondary)
             }
         }.padding(.vertical, 2)
     }
 }
-struct JobDetail: View {
-    @ObservedObject var job: Job; let store: Store; @State private var area = "Tutto"; @State private var sheetPlan: FixPlan?
-    var body: some View {
-        if let r = job.report {
-            let areas = ["Tutto", "File", "Video", "Audio", "Sottotitoli"]
-            let shown = r.findings.filter { area == "Tutto" || $0.area == area }.sorted { ($0.sev, $1.time ?? 0) > ($1.sev, $0.time ?? 0) }
-            ScrollView { VStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .top) {
-                    Image(systemName: r.worst.symbol).font(.system(size: 34)).foregroundStyle(r.worst.color)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(r.file.deletingPathExtension().lastPathComponent).font(.title3.weight(.semibold)).lineLimit(2)
-                        Text(r.verdict).font(.headline).foregroundStyle(r.worst.color)
-                        let c = r.counts; Text("\(c.err) problemi · \(c.warn) attenzioni · \(c.info) note — analisi in \(Int(r.seconds)) s").font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button { store.startAnalysis(job) } label: { Label("Rianalizza", systemImage: "arrow.clockwise") }.disabled(job.fixProgress != nil)
-                    Button { sheetPlan = FixPlan() } label: { Label("Correggi…", systemImage: "wand.and.stars") }.disabled(job.fixProgress != nil)
-                    Button { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(r.text, forType: .string) } label: { Label("Copia", systemImage: "doc.on.doc") }
-                    Button { save(r) } label: { Label("Salva…", systemImage: "square.and.arrow.down") }
-                }
-                if let fr = job.fixResult { FixBanner(result: fr) { store.restore(job) } }
-                if job.fixProgress != nil { HStack { ProgressView(value: job.fixProgress).frame(width: 200); Text(job.fixStage).font(.callout).foregroundStyle(.secondary) } }
-                Picker("", selection: $area) { ForEach(areas, id: \.self) { Text($0).tag($0) } }.pickerStyle(.segmented).labelsHidden()
-                ForEach(shown) { f in FindingCard(f: f) { var p = FixPlan(); f.fixes.forEach { p.merge($0) }; sheetPlan = p } }
-                if shown.isEmpty { Text("Nessuna segnalazione in quest'area.").foregroundStyle(.secondary) }
-                Divider().padding(.vertical, 4)
-                Text("Dati tecnici").font(.headline)
-                ForEach(r.tech.sorted { $0.order < $1.order }) { s in
-                    DisclosureGroup(s.title) {
-                        VStack(alignment: .leading, spacing: 4) { ForEach(s.rows) { row in HStack(alignment: .top) { Text(row.k).foregroundStyle(.secondary).frame(width: 190, alignment: .leading); Text(row.v).textSelection(.enabled) } }.font(.callout) }.padding(.top, 4)
-                    }
-                }
-            }.padding(20) }
-            .onAppear { if ProcessInfo.processInfo.environment["MOVIEPREFLIGHT_SHEET"] != nil { var p = FixPlan(); r.findings.forEach { $0.fixes.forEach { p.merge($0) } }; sheetPlan = p } }   // solo per le prove a vista
-            .sheet(isPresented: Binding(get: { sheetPlan != nil }, set: { if !$0 { sheetPlan = nil } })) { FixSheet(job: job, report: r, plan: sheetPlan ?? FixPlan(), store: store).onChange(of: job.fixProgress == nil) { _ in } }
-            .onChange(of: job.fixProgress != nil) { running in if running { /* resta aperta per mostrare l'avanzamento */ } else { sheetPlan = nil } }
-        } else {
-            VStack(spacing: 12) {
-                Text(job.url.lastPathComponent).font(.headline).lineLimit(2)
-                ProgressView(value: job.progress).frame(width: 320)
-                Text(job.stage).foregroundStyle(.secondary)
-            }.frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-    }
-    func save(_ r: Report) {
-        let p = NSSavePanel(); p.nameFieldStringValue = r.file.deletingPathExtension().lastPathComponent + " — preflight.txt"; p.allowedContentTypes = [.plainText]
-        if p.runModal() == .OK, let u = p.url { try? r.text.write(to: u, atomically: true, encoding: .utf8) }
-    }
-}
-struct FindingCard: View {
-    let f: Finding; var onFix: () -> Void = {}
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: f.sev.symbol).foregroundStyle(f.sev.color).font(.system(size: 17)).frame(width: 22)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(f.title).font(.callout.weight(.semibold)).textSelection(.enabled)
-                    Spacer(minLength: 8)
-                    if let t = f.time { Text(hms(t)).font(.caption.monospacedDigit()).padding(.horizontal, 6).padding(.vertical, 1).background(Capsule().fill(Color.secondary.opacity(0.18))) }
-                    Text(f.area).font(.caption).foregroundStyle(.secondary)
-                }
-                if !f.detail.isEmpty { Text(f.detail).font(.callout).foregroundStyle(.secondary).textSelection(.enabled).fixedSize(horizontal: false, vertical: true) }
-                if !f.fixes.isEmpty { Button { onFix() } label: { Label("Correggi…", systemImage: "wand.and.stars") }.controlSize(.small).padding(.top, 2) }
-                if let t = f.thumb, let img = NSImage(contentsOf: t) { Image(nsImage: img).resizable().scaledToFit().frame(maxHeight: 150).cornerRadius(5).padding(.top, 4) }
-            }
-        }
-        .padding(10).background(RoundedRectangle(cornerRadius: 8).fill(f.sev.color.opacity(0.09))).overlay(RoundedRectangle(cornerRadius: 8).stroke(f.sev.color.opacity(0.35)))
-    }
-}
-
 struct FixBanner: View {
     let result: FixResult; let undo: () -> Void
     var body: some View {

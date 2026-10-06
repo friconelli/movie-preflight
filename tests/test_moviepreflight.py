@@ -113,6 +113,24 @@ try:
     rc, o = fix(hd, "--tonemap"); v = tracks(hd, "video")[0] if rc == 0 else {}
     check(rc == 0 and v.get("color_transfer") == "bt709" and "luminanza media" in o and os.path.exists(hd.replace(".mkv", ".orig_backup.mkv")), f"HDR convertito in SDR con controllo della luminanza ({v.get('color_transfer')})")
     rc, o = fix(os.path.join(T, "pulito.mkv"), "--tonemap"); check(rc != 0 and "non è HDR" in o, "conversione HDR rifiutata su un video SDR")
+    print("== accenti rovinati, forzati, rinomina, dati del film")
+    clean = ["Sì, è così, perché la città è già qui e non c'è più tempo, %d" % i for i in range(25)]
+    moj = os.path.join(T, "moj.srt"); srt(moj, [(i * 3 + 1, t.encode("utf-8").decode("cp1252")) for i, t in enumerate(clean)])
+    mf = video("moj.mkv", subs=[(moj, "ita")]); o = analyze(mf)
+    check("Caratteri rovinati" in o and "Si ripara senza toccare le battute" in o, "accenti rovinati (doppia codifica) rilevati")
+    rc, o2 = fix(mf, "--repair-sub", "0"); txt = subprocess.run(["ffmpeg", "-v", "error", "-i", mf, "-map", "0:s:0", "-f", "srt", "-"], capture_output=True, text=True).stdout
+    check(rc == 0 and "Sì, è così, perché la città è già qui e non c'è più tempo, 7" in txt and "Ã" not in txt and "Caratteri rovinati" not in analyze(mf), "accenti riparati, il resto delle battute invariato")
+    pt = os.path.join(T, "pt.srt"); srt(pt, [(i * 3 + 1, "Não é São Paulo, eles já estão aqui e não sei porquê, %d" % i) for i in range(25)])
+    check("Caratteri rovinati" not in analyze(video("pt.mkv", subs=[(pt, "por")])), "sottotitoli portoghesi (ã, ç) non segnalati per errore")
+    ff_ = video("forz.mkv", subs=[(os.path.join(T, "it.srt"), "ita")]); rc, o2 = fix(ff_, "--forced", "0:1")
+    check(rc == 0 and tracks(ff_, "subtitle")[0]["disposition"]["forced"] == 1, "etichetta «forzati» impostata")
+    rn = video("da_rinominare.mkv"); rc, o2 = fix(rn, "--rename", "Nuovo Nome (2000 - Tizio Caio)")
+    check(rc == 0 and os.path.exists(os.path.join(T, "Nuovo Nome (2000 - Tizio Caio).mkv")) and not os.path.exists(rn), "file rinominato")
+    rc, o2 = fix(os.path.join(T, "Nuovo Nome (2000 - Tizio Caio).mkv"), "--rename", "rinominato due"); check(rc == 0, "rinomina senza altre modifiche"); rc, o2 = fix(os.path.join(T, "rinominato due.mkv"), "--rename", "pulito"); check(rc != 0 and "già" in o2, "la rinomina non sovrascrive un file esistente")
+    open(os.path.join(T, "Piccoli omicidi tra amici (1994 - Danny Boyle).mkv"), "w").write("x")
+    r = subprocess.run([BIN, "--meta", os.path.join(T, "Piccoli omicidi tra amici (1994 - Danny Boyle).mkv")], capture_output=True, text=True).stdout
+    check("titolo «Piccoli omicidi tra amici» anno 1994 regista Danny Boyle" in r, "titolo, anno e regista ricavati dal nome del file")
+    if "trovato" in r or "non trovato" in r: check("Q506032" in r and "89 min" in r or "non trovato" in r and "Q506032" not in r, "dati del film da Wikidata (se la rete è raggiungibile)")
     print("== Dolby")
     ac = video("aac.mkv", af="sine=f=300:d=%d,volume=0.2" % D); o = analyze(ac)
     check("Audio non Dolby (AAC)" in o and "Dolby: no (AAC)" in o, "traccia AAC segnalata come non Dolby")

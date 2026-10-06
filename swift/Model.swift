@@ -5,14 +5,14 @@ enum Sev: Int, Comparable { case ok, info, warn, error
     var label: String { ["OK", "Nota", "Attenzione", "Problema"][rawValue] }
 }
 /// Correzione suggerita da una segnalazione (i numeri sono posizioni all'interno del proprio tipo: audio 0, 1…, sottotitoli 0, 1…).
-enum FixHint { case defaultAudio(Int), defaultSub(Int?), setLang(String, Int), cleanSub(Int), dropSub(Int), trimStart(Double), trimEnd(Double), normalize(Int), boostCenter(Int), levelGain(Int), deinterlace, toDolby(Int), clearTitle, tonemap, setLangTo(String, Int, String), syncSubs(Int, Double, Double) }   // syncSubs: tempo nuovo = a·tempo + b
+enum FixHint { case defaultAudio(Int), defaultSub(Int?), setLang(String, Int), cleanSub(Int), dropSub(Int), trimStart(Double), trimEnd(Double), normalize(Int), boostCenter(Int), levelGain(Int), deinterlace, toDolby(Int), clearTitle, tonemap, repairEncoding(Int), setForced(Int, Bool), rename(String), setLangTo(String, Int, String), syncSubs(Int, Double, Double) }   // syncSubs: tempo nuovo = a·tempo + b
 struct Finding: Identifiable { let id = UUID(); var sev: Sev; var area: String; var title: String; var detail: String; var time: Double?; var thumb: URL?; var fixes: [FixHint] = [] }
 struct TrackInfo: Identifiable { var id: Int { ord }; var ord: Int; var lang: String; var title: String; var codec: String; var channels: Int; var isDefault: Bool; var forced: Bool; var image: Bool; var bitrate: Double }
 struct KV: Identifiable { let id = UUID(); var k: String; var v: String }
 struct Section: Identifiable { let id = UUID(); var title: String; var order: Int; var rows: [KV] }
 
 struct Report {
-    var file: URL; var duration = 0.0; var findings: [Finding] = []; var tech: [Section] = []; var seconds = 0.0; var audioTracks: [TrackInfo] = []; var subTracks: [TrackInfo] = []
+    var file: URL; var duration = 0.0; var findings: [Finding] = []; var tech: [Section] = []; var seconds = 0.0; var audioTracks: [TrackInfo] = []; var subTracks: [TrackInfo] = []; var meta: MovieMeta?
     var worst: Sev { findings.map(\.sev).max() ?? .ok }
     var verdict: String { switch worst { case .error: return "Problemi da risolvere"; case .warn: return "Da controllare"; default: return "Pronto per la sala" } }
     var counts: (err: Int, warn: Int, info: Int) { (findings.filter { $0.sev == .error }.count, findings.filter { $0.sev == .warn }.count, findings.filter { $0.sev == .info }.count) }

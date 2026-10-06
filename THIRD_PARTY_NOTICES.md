@@ -22,3 +22,8 @@ Movie Preflight è software libero, distribuito con licenza **GNU GPL v3** (vedi
 Il formato Dolby Digital (AC-3) viene prodotto con l'encoder libero di FFmpeg, non con gli encoder ufficiali Dolby. Dolby, Dolby Digital, Dolby Vision e Dolby Atmos sono marchi di Dolby Laboratories; qui servono solo a indicare i formati.
 
 Per ricostruire l'app con gli stessi componenti: `brew install pkgconf x264 x265 dav1d svt-av1 libvmaf zimg whisper-cpp media-info`, poi `tools/build_ffmpeg.sh` e `./build.sh`.
+
+## Dati online (opzionali, con consenso dell'utente)
+- **Wikidata** (https://www.wikidata.org): dati strutturati in pubblico dominio (CC0).
+- **Wikipedia** (it/en): descrizioni sotto CC BY-SA 4.0; le locandine sono ospitate da Wikipedia con le loro licenze (spesso uso a fini di identificazione) e vengono solo mostrate nell'app, mai salvate o ridistribuite.
+Alle API viene inviato soltanto il titolo (e l'anno) ricavato dal nome del file, con uno User-Agent che identifica l'app.

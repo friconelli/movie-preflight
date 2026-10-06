@@ -84,9 +84,9 @@ func scanVideoWindows(_ pr: Probe, _ path: String, _ c: Collector, progress: @es
         c.rows("Video", order: 1, [("Immagine utile", "\(p[0])×\(p[1])")])
     }
     // neri e fermi immagine
-    for b in res[0].blacks where b.0 < 1 && b.1 > 8 { c.add(.warn, "Video", String(format: "Nero iniziale lungo (%.0f s)", b.1), "Lo schermo resta nero prima che parta il film.", time: 0) }
+    for b in res[0].blacks where b.0 < 1 && b.1 > 8 { c.add(.warn, "Video", String(format: "Nero iniziale lungo (%.0f s)", b.1), "Lo schermo resta nero prima che parta il film.", time: 0, fix: [.trimStart(b.0 + b.1)]) }
     if let b = res[0].blacks.first, b.1 >= 59 { c.add(.error, "Video", "Immagine nera nei primi 60 secondi", "Il video sembra vuoto all'inizio.", time: 0) }
-    if let b = res[2].blacks.last, b.0 + b.1 >= d - 2, b.1 > 20 { c.add(.warn, "Video", String(format: "Nero finale lungo (%.0f s)", b.1), "Dopo la fine il film resta nero a lungo.", time: b.0) }
+    if let b = res[2].blacks.last, b.0 + b.1 >= d - 2, b.1 > 20 { c.add(.warn, "Video", String(format: "Nero finale lungo (%.0f s)", b.1), "Dopo la fine il film resta nero a lungo.", time: b.0, fix: [.trimEnd(b.0)]) }
     if let b = res[1].blacks.first(where: { $0.1 > 5 }) { c.add(.warn, "Video", String(format: "Schermo nero di %.0f s a metà film", b.1), "Se non è voluto può indicare un pezzo mancante o un errore di codifica.", time: b.0) }
     for (i, r) in res.enumerated() { if let f = r.freezes.first(where: { $0.1 > 8 }) { c.add(.info, "Video", String(format: "Immagine ferma per %.0f s (%@)", f.1, wins[i].0), "Fermo immagine o scheda fissa.", time: f.0) } }
     let q = res.filter { $0.qn > 100 }
@@ -130,6 +130,23 @@ func scanCredits(_ pr: Probe, _ path: String, _ tmp: URL, _ c: Collector, progre
         let where_ = h.0 < 60 ? "nei primi secondi" : "verso la fine"
         c.add(.error, "Video", "Scritta pubblicitaria o crediti del torrent nell'immagine (\(where_))", "Testo rilevato: «\(String(h.1.prefix(140)))» — ha fatto scattare: «\(h.1.found(adPattern) ?? "")»", time: h.0, thumb: dest, fix: [h.0 < 60 ? .trimStart(startEnd) : .trimEnd(endBegin)])
     }
+}
+
+// MARK: caratteri rovinati (doppia codifica UTF-8 → Windows-1252 → UTF-8)
+/// Sequenze tipiche: «Ã» + carattere (Ã¨ = è, Ã  = à), «Â» + spazio/simbolo, «â€» + segno (virgolette e trattini). Maiuscole e minuscole contano: «ã» è un carattere normale in portoghese.
+let mojibakePattern = "Ã[\\x{80}-\\x{BF}€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ]|Â[\\x{A0}-\\x{BF}]|â€[\\x{80}-\\x{BF}€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ]|\\x{FFFD}"
+/// Ripara un testo con doppia codifica: lo riscrive come byte Windows-1252 e rilegge quei byte come UTF-8. Se non è riparabile lo lascia com'è.
+func repairMojibake(_ s: String) -> String {
+    guard s.hasExact(mojibakePattern), let d = s.data(using: .windowsCP1252, allowLossyConversion: false), let r = String(data: d, encoding: .utf8) else {
+        // caratteri non rappresentabili in CP1252 (rari): ripara solo le sequenze riconosciute una per una
+        guard s.hasExact(mojibakePattern) else { return s }
+        var out = ""; var it = Array(s); var i = 0
+        while i < it.count {
+            if i + 1 < it.count, it[i] == "Ã" || it[i] == "Â", let d = String(it[i...i + 1]).data(using: .windowsCP1252), let r = String(data: d, encoding: .utf8) { out += r; i += 2 } else { out.append(it[i]); i += 1 }
+        }
+        it = []; return out
+    }
+    return r
 }
 
 // MARK: sottotitoli: lingua, pubblicità, sincronia, qualità
@@ -186,8 +203,12 @@ func scanSubtitles(_ pr: Probe, _ path: String, _ tmp: URL, _ c: Collector) {
         if overl > 8 { c.add(.warn, area, "Battute sovrapposte — \(n)", "\(overl) battute iniziano prima che finisca la precedente: appaiono una sopra l'altra.") }
         let fast = cues.filter { let dur = max($0.e - $0.s, 0.1); return Double($0.t.count) / dur > 30 && $0.t.count > 20 }.count
         if fast > max(10, cues.count / 25) { c.add(.warn, area, "Sottotitoli troppo veloci da leggere — \(n)", "\(fast) battute superano i 30 caratteri al secondo.") }
-        let moj = cues.filter { $0.t.has(#"Ã.|â€|Â |�"#) }.count
-        if moj > 3 { c.add(.error, area, "Caratteri rovinati — \(n)", "\(moj) battute con lettere accentate illeggibili (problema di codifica).", time: cues.first(where: { $0.t.has(#"Ã.|â€|Â |�"#) })?.s) }
-        if forced && cues.count > 150 { c.add(.warn, area, "Troppe battute per essere «forzati» — \(n)", "\(cues.count) battute: sembra una traccia completa marcata come forzata.") }
+        let moj = cues.filter { $0.t.hasExact(mojibakePattern) }.count
+        if moj > 3 {
+            let bad = cues.first(where: { $0.t.hasExact(mojibakePattern) })
+            let sample = String((bad?.t ?? "").replacingOccurrences(of: "\n", with: " ").prefix(60))
+            c.add(.error, area, "Caratteri rovinati — \(n)", "\(moj) battute con lettere accentate illeggibili (testo scritto in UTF-8 ma riletto come Windows-1252 e salvato di nuovo), per esempio «\(sample)». Si ripara senza toccare le battute.", time: bad?.s, fix: [.repairEncoding(item.offset)])
+        }
+        if forced && cues.count > 150 { c.add(.warn, area, "Troppe battute per essere «forzati» — \(n)", "\(cues.count) battute: sembra una traccia completa marcata come forzata.", fix: [.setForced(item.offset, false)]) }
     }
 }

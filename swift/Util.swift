@@ -61,5 +61,7 @@ extension String {
     }
     /// Il testo che ha fatto scattare un'espressione (per mostrarlo all'utente).
     func found(_ pattern: String) -> String? { range(of: pattern, options: [.regularExpression, .caseInsensitive]).map { String(self[$0]) } }
+    /// Come `has`, ma rispettando maiuscole e minuscole (serve per riconoscere i caratteri rovinati: «Ã» è un segnale, «ã» no).
+    func hasExact(_ pattern: String) -> Bool { range(of: pattern, options: [.regularExpression]) != nil }
     func has(_ pattern: String) -> Bool { range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil }
 }

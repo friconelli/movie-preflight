@@ -9,14 +9,17 @@ struct FixPlan {
     var lang: [String: String] = [:]                 // "a0" / "s1" → codice lingua a 3 lettere
     var cleanSubs: Set<Int> = [], dropSubs: Set<Int> = [], dropAudio: Set<Int> = [], normalize: Set<Int> = [], boostCenter: Set<Int> = [], levelGain: Set<Int> = [], toDolby: Set<Int> = []
     var syncSubs: [Int: (a: Double, b: Double)] = [:]   // sottotitoli da risincronizzare: tempo nuovo = a·tempo + b
+    var rename: String?                                  // nuovo nome del file (senza estensione)
+    var repairSubs: Set<Int> = []                       // sottotitoli con accenti rovinati (doppia codifica) da riparare
+    var forcedFlags: [Int: Bool] = [:]                  // etichetta «forzati» da impostare o togliere
     var tonemap = false                                 // HDR → SDR (zscale + tonemap), ricodifica del video
     var clearTitle = false                              // toglie il titolo dai metadati del contenitore
     var deinterlace = false                            // deinterlacciamento dell'immagine (ricodifica del video)
     var centerDB = 4.0                                 // quanto alzare il canale centrale
     var audioTouched: Set<Int> { normalize.union(boostCenter).union(levelGain).union(toDolby) }
     var trimStart: Double?, trimEnd: Double?          // taglia i primi N secondi / dal secondo N alla fine
-    var changesContent: Bool { !cleanSubs.isEmpty || !dropSubs.isEmpty || !dropAudio.isEmpty || !normalize.isEmpty || !boostCenter.isEmpty || !levelGain.isEmpty || !toDolby.isEmpty || !syncSubs.isEmpty || deinterlace || tonemap || trimStart != nil || trimEnd != nil }
-    var isEmpty: Bool { !changesContent && !clearTitle && audioDefault == nil && subDefault == .keep && lang.isEmpty }
+    var changesContent: Bool { !cleanSubs.isEmpty || !dropSubs.isEmpty || !dropAudio.isEmpty || !normalize.isEmpty || !boostCenter.isEmpty || !levelGain.isEmpty || !toDolby.isEmpty || !syncSubs.isEmpty || !repairSubs.isEmpty || deinterlace || tonemap || trimStart != nil || trimEnd != nil }
+    var isEmpty: Bool { !changesContent && !clearTitle && audioDefault == nil && subDefault == .keep && lang.isEmpty && forcedFlags.isEmpty }
     mutating func merge(_ h: FixHint) {
         switch h {
         case .defaultAudio(let i): audioDefault = i
@@ -33,12 +36,43 @@ struct FixPlan {
         case .toDolby(let i): toDolby.insert(i)
         case .clearTitle: clearTitle = true
         case .tonemap: tonemap = true
+        case .rename(let n): rename = n
+        case .repairEncoding(let i): repairSubs.insert(i)
+        case .setForced(let i, let f): forcedFlags[i] = f
         case .setLangTo(let k, let i, let code): lang["\(k)\(i)"] = code
         case .syncSubs(let i, let a, let b): syncSubs[i] = (a, b)
         }
     }
 }
-struct FixResult { var ok: Bool; var message: String; var lines: [String] = []; var backup: URL? }
+extension FixPlan {
+    /// Descrizione in italiano di tutto quello che verrà fatto (per la conferma prima di applicare).
+    func summary(_ rep: Report) -> [String] {
+        var l: [String] = []
+        func a(_ i: Int) -> String { "audio \(i + 1)" + (rep.audioTracks.indices.contains(i) && !rep.audioTracks[i].lang.isEmpty ? " (\(langLabel(rep.audioTracks[i].lang)))" : "") }
+        func s(_ i: Int) -> String { "sottotitoli \(i + 1)" + (rep.subTracks.indices.contains(i) && !rep.subTracks[i].lang.isEmpty ? " (\(langLabel(rep.subTracks[i].lang)))" : "") }
+        if let n = rename { l.append("Rinominare il file in «\(n)»") }
+        if clearTitle { l.append("Togliere il titolo dai metadati del file") }
+        if let d = audioDefault { l.append("Rendere predefinita la traccia \(a(d))") }
+        switch subDefault { case .none: l.append("Spegnere i sottotitoli di default"); case .track(let k): l.append("Rendere predefiniti i \(s(k))"); case .keep: break }
+        for (k, v) in lang.sorted(by: { $0.key < $1.key }) { l.append("Impostare la lingua \(langLabel(v)) su \(k.hasPrefix("a") ? a(Int(k.dropFirst())!) : s(Int(k.dropFirst())!))") }
+        for (i, f) in forcedFlags.sorted(by: { $0.key < $1.key }) { l.append(f ? "Marcare come «forzati» i \(s(i))" : "Togliere l'etichetta «forzati» dai \(s(i))") }
+        for i in repairSubs.sorted() { l.append("Riparare gli accenti rovinati dei \(s(i))") }
+        for i in cleanSubs.sorted() { l.append("Togliere pubblicità e crediti dai \(s(i))") }
+        for (i, v) in syncSubs.sorted(by: { $0.key < $1.key }) { l.append(v.a == 1 ? String(format: "Spostare di %+.1f s i %@", v.b, s(i)) : "Risincronizzare (frame rate) i \(s(i))") }
+        for i in dropSubs.sorted() { l.append("Eliminare i \(s(i))") }
+        for i in dropAudio.sorted() { l.append("Eliminare la traccia \(a(i))") }
+        for i in toDolby.sorted() { l.append("Convertire in Dolby Digital (AC-3) la traccia \(a(i))") }
+        for i in levelGain.sorted() { l.append("Portare a -24 LUFS il volume della traccia \(a(i)) (guadagno fisso)") }
+        for i in boostCenter.sorted() { l.append(String(format: "Alzare i dialoghi (centro +%.0f dB) nella traccia %@", centerDB, a(i))) }
+        for i in normalize.sorted() { l.append("Compressione dinamica sulla traccia \(a(i)) (sconsigliata)") }
+        if let t = trimStart { l.append("Tagliare l'inizio fino a \(hms(t))") }
+        if let t = trimEnd { l.append("Tagliare la fine da \(hms(t))") }
+        if tonemap { l.append("Convertire l'immagine da HDR a SDR (ricodifica lunga)") }
+        if deinterlace { l.append("Deinterlacciare l'immagine (ricodifica lunga)") }
+        return l
+    }
+}
+struct FixResult { var ok: Bool; var message: String; var lines: [String] = []; var backup: URL?; var newURL: URL? }
 
 /// Filtro validato per "musica troppo forte, dialoghi troppo bassi" (vedi la libreria film): livella la dinamica e limita i picchi.
 /// Livello obiettivo della regolazione a guadagno fisso (cinema/streaming: -24 LUFS integrati).
@@ -99,6 +133,7 @@ func applyFix(_ url: URL, _ plan: FixPlan, progress: @escaping (Double, String) 
             var sets: [String] = []
             switch plan.subDefault { case .none: sets += ["flag-default=0"]; case .track(let k): sets += ["flag-default=\(i == k ? 1 : 0)"]; case .keep: break }
             if let l = plan.lang["s\(i)"] { sets += ["language=\(l)"] }
+            if let f = plan.forcedFlags[i] { sets += ["flag-forced=\(f ? 1 : 0)"]; lines.append("Sottotitoli \(i + 1): etichetta «forzati» \(f ? "impostata" : "tolta")") }
             for s in sets { a += ["--edit", "track:s\(i + 1)", "--set", s] }
         }
         let o = run(mp, a); if o.status > 1 { return FixResult(ok: false, message: "mkvpropedit non è riuscito: \(o.text.suffix(200))") }
@@ -130,11 +165,17 @@ func applyFix(_ url: URL, _ plan: FixPlan, progress: @escaping (Double, String) 
     }
     // sottotitoli ripuliti: si riscrive la traccia senza le battute con pubblicità/crediti
     var extra: [Int: Int] = [:]; var inputs: [String] = []
-    for k in plan.cleanSubs.union(Set(plan.syncSubs.keys)).sorted() where subs.indices.contains(k) && !plan.dropSubs.contains(k) {
+    for k in plan.cleanSubs.union(Set(plan.syncSubs.keys)).union(plan.repairSubs).sorted() where subs.indices.contains(k) && !plan.dropSubs.contains(k) {
         let raw = work.appendingPathComponent("raw\(k).srt"); run(ff, ["-nostdin", "-y", "-v", "error", "-i", path, "-map", "0:s:\(k)", "-f", "srt", raw.path])
         guard let txt = try? String(contentsOf: raw, encoding: .utf8) else { return FixResult(ok: false, message: "Non riesco a leggere i sottotitoli \(k + 1).") }
         let all = parseSRT(txt); let (sa, sb) = plan.syncSubs[k] ?? (1, 0)
-        let moved = all.map { Cue(s: $0.s * sa + sb, e: $0.e * sa + sb, t: $0.t) }
+        let moved = all.map { Cue(s: $0.s * sa + sb, e: $0.e * sa + sb, t: plan.repairSubs.contains(k) ? repairMojibake($0.t) : $0.t) }
+        if plan.repairSubs.contains(k) {
+            let before = all.filter { $0.t.hasExact(mojibakePattern) }.count, left = moved.filter { $0.t.hasExact(mojibakePattern) }.count
+            if before == 0 { return FixResult(ok: false, message: "I sottotitoli \(k + 1) non hanno caratteri rovinati da riparare.") }
+            if left > max(2, before / 10) { return FixResult(ok: false, message: "La riparazione dei sottotitoli \(k + 1) non è riuscita (restano \(left) battute rovinate su \(before)): il file non è stato toccato.") }
+            lines.append("Sottotitoli \(k + 1): riparati gli accenti di \(before - left) battute")
+        }
         let keep = moved.filter { (!plan.cleanSubs.contains(k) || !$0.t.has(adPattern)) && $0.e > s0 && $0.s < e0 }
         func ts(_ x: Double) -> String { let v = max(0, x - s0); let ms = Int((v * 1000).rounded()); return String(format: "%02d:%02d:%02d,%03d", ms / 3_600_000, ms / 60_000 % 60, ms / 1000 % 60, ms % 1000) }
         let out = keep.enumerated().map { "\($0 + 1)\n\(ts($1.s)) --> \(ts($1.e))\n\($1.t)\n" }.joined(separator: "\n")
@@ -202,10 +243,10 @@ func applyFix(_ url: URL, _ plan: FixPlan, progress: @escaping (Double, String) 
         if let x = extra[i] { a += ["-map", "\(x):0"]; let tg = tags(s); if !lang(s).isEmpty { a += ["-metadata:s:s:\(m)", "language=\(lang(s))"] }; if let t = tg["title"] { a += ["-metadata:s:s:\(m)", "title=\(t)"] } }
         else { a += ["-map", "0:s:\(i)"] }
         if let l = plan.lang["s\(i)"] { a += ["-metadata:s:s:\(m)", "language=\(l)"] }
-        let forced = disp(s, "forced") == 1; var flags: [String] = []
+        let forced = plan.forcedFlags[i] ?? (disp(s, "forced") == 1); var flags: [String] = []
         switch plan.subDefault { case .none: break; case .track(let k): if i == k { flags.append("default") }; case .keep: if disp(s, "default") == 1 { flags.append("default") } }
         if forced { flags.append("forced") }
-        if plan.subDefault != .keep || extra[i] != nil { a += ["-disposition:s:\(m)", flags.isEmpty ? "0" : flags.joined(separator: "+")] }
+        if plan.subDefault != .keep || extra[i] != nil || plan.forcedFlags[i] != nil { a += ["-disposition:s:\(m)", flags.isEmpty ? "0" : flags.joined(separator: "+")] }
         m += 1
     }
     if ext == "mkv" { a += ["-map", "0:t?"] }
@@ -275,4 +316,15 @@ func applyFix(_ url: URL, _ plan: FixPlan, progress: @escaping (Double, String) 
     progress(1, "Fatto")
     let msg = plan.changesContent ? "Fatto. L'originale è stato conservato come «\(bk!.lastPathComponent)».\(warn)" : "Fatto. Etichette aggiornate (la versione precedente è nel Cestino)."
     return FixResult(ok: true, message: msg, lines: lines, backup: bk)
+}
+
+/// Rinomina il file nella stessa cartella (nessuna sovrascrittura).
+func renameFile(_ url: URL, to base: String) -> FixResult {
+    let clean = base.replacingOccurrences(of: "/", with: "-").trimmingCharacters(in: .whitespaces)
+    guard !clean.isEmpty else { return FixResult(ok: false, message: "Nome non valido.") }
+    let dest = url.deletingLastPathComponent().appendingPathComponent(clean + "." + url.pathExtension)
+    if dest.path == url.path { return FixResult(ok: true, message: "Il file ha già questo nome.") }
+    if FileManager.default.fileExists(atPath: dest.path) { return FixResult(ok: false, message: "Esiste già un file chiamato «\(dest.lastPathComponent)»: non lo sovrascrivo.") }
+    do { try FileManager.default.moveItem(at: url, to: dest) } catch { return FixResult(ok: false, message: "Rinomina non riuscita: \(error.localizedDescription)") }
+    return FixResult(ok: true, message: "Rinominato in «\(dest.lastPathComponent)».", lines: [], backup: nil, newURL: dest)
 }
