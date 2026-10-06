@@ -5,6 +5,7 @@ import AppKit
 final class Job: ObservableObject, Identifiable {
     let id = UUID(); let url: URL
     @Published var progress = 0.0; @Published var stage = "In coda"; @Published var report: Report?
+    @Published var fixProgress: Double?; @Published var fixStage = ""; @Published var fixResult: FixResult?
     init(_ u: URL) { url = u }
 }
 final class Store: ObservableObject {
@@ -25,6 +26,26 @@ final class Store: ObservableObject {
             }
         }
     }
+    /// Applica una correzione (una per volta, dopo l'analisi in corso) e poi rianalizza il film per mostrare l'effetto.
+    func fix(_ j: Job, _ plan: FixPlan) {
+        j.fixProgress = 0; j.fixStage = "In attesa…"; j.fixResult = nil
+        q.async {
+            let r = applyFix(j.url, plan) { p, s in DispatchQueue.main.async { j.fixProgress = p; j.fixStage = s } }
+            let rep = r.ok ? analyze(j.url) : nil
+            DispatchQueue.main.async { j.fixResult = r; j.fixProgress = nil; if let rep = rep { j.report = rep } }
+        }
+    }
+    /// Annulla l'ultima correzione: il file corrente va nel Cestino e torna l'originale conservato.
+    func restore(_ j: Job) {
+        guard let b = j.fixResult?.backup else { return }
+        j.fixProgress = 0; j.fixStage = "Ripristino dell'originale…"
+        q.async {
+            var msg = FixResult(ok: true, message: "Originale ripristinato.")
+            do { try FileManager.default.trashItem(at: j.url, resultingItemURL: nil); try FileManager.default.moveItem(at: b, to: j.url) } catch { msg = FixResult(ok: false, message: "Ripristino non riuscito: \(error.localizedDescription)") }
+            let rep = analyze(j.url)
+            DispatchQueue.main.async { j.fixResult = msg; j.fixProgress = nil; j.report = rep }
+        }
+    }
     func open() { let p = NSOpenPanel(); p.allowsMultipleSelection = true; p.canChooseDirectories = true; p.message = "Scegli uno o più film"; if p.runModal() == .OK { add(p.urls) } }
 }
 
@@ -41,7 +62,7 @@ struct ContentView: View {
             else { HStack(spacing: 0) {
                 List(store.jobs, selection: $store.selection) { j in JobRow(job: j).tag(j.id) }.frame(width: 250).listStyle(.sidebar)
                 Divider()
-                if let j = store.jobs.first(where: { $0.id == store.selection }) { JobDetail(job: j) } else { Spacer() }
+                if let j = store.jobs.first(where: { $0.id == store.selection }) { JobDetail(job: j, store: store).id(j.id) } else { Spacer() }
             } }
         }
         .frame(minWidth: 900, minHeight: 600)
@@ -76,7 +97,7 @@ struct JobRow: View {
     }
 }
 struct JobDetail: View {
-    @ObservedObject var job: Job; @State private var area = "Tutto"
+    @ObservedObject var job: Job; let store: Store; @State private var area = "Tutto"; @State private var sheetPlan: FixPlan?
     var body: some View {
         if let r = job.report {
             let areas = ["Tutto", "File", "Video", "Audio", "Sottotitoli"]
@@ -90,11 +111,14 @@ struct JobDetail: View {
                         let c = r.counts; Text("\(c.err) problemi · \(c.warn) attenzioni · \(c.info) note — analisi in \(Int(r.seconds)) s").font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
+                    Button { sheetPlan = FixPlan() } label: { Label("Correggi…", systemImage: "wand.and.stars") }.disabled(job.fixProgress != nil)
                     Button { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(r.text, forType: .string) } label: { Label("Copia", systemImage: "doc.on.doc") }
                     Button { save(r) } label: { Label("Salva…", systemImage: "square.and.arrow.down") }
                 }
+                if let fr = job.fixResult { FixBanner(result: fr) { store.restore(job) } }
+                if job.fixProgress != nil { HStack { ProgressView(value: job.fixProgress).frame(width: 200); Text(job.fixStage).font(.callout).foregroundStyle(.secondary) } }
                 Picker("", selection: $area) { ForEach(areas, id: \.self) { Text($0).tag($0) } }.pickerStyle(.segmented).labelsHidden()
-                ForEach(shown) { f in FindingCard(f: f) }
+                ForEach(shown) { f in FindingCard(f: f) { var p = FixPlan(); f.fixes.forEach { p.merge($0) }; sheetPlan = p } }
                 if shown.isEmpty { Text("Nessuna segnalazione in quest'area.").foregroundStyle(.secondary) }
                 Divider().padding(.vertical, 4)
                 Text("Dati tecnici").font(.headline)
@@ -104,6 +128,9 @@ struct JobDetail: View {
                     }
                 }
             }.padding(20) }
+            .onAppear { if ProcessInfo.processInfo.environment["COLLAUDO_SHEET"] != nil { var p = FixPlan(); r.findings.forEach { $0.fixes.forEach { p.merge($0) } }; sheetPlan = p } }   // solo per le prove a vista
+            .sheet(isPresented: Binding(get: { sheetPlan != nil }, set: { if !$0 { sheetPlan = nil } })) { FixSheet(job: job, report: r, plan: sheetPlan ?? FixPlan(), store: store).onChange(of: job.fixProgress == nil) { _ in } }
+            .onChange(of: job.fixProgress != nil) { running in if running { /* resta aperta per mostrare l'avanzamento */ } else { sheetPlan = nil } }
         } else {
             VStack(spacing: 12) {
                 Text(job.url.lastPathComponent).font(.headline).lineLimit(2)
@@ -118,7 +145,7 @@ struct JobDetail: View {
     }
 }
 struct FindingCard: View {
-    let f: Finding
+    let f: Finding; var onFix: () -> Void = {}
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: f.sev.symbol).foregroundStyle(f.sev.color).font(.system(size: 17)).frame(width: 22)
@@ -130,9 +157,24 @@ struct FindingCard: View {
                     Text(f.area).font(.caption).foregroundStyle(.secondary)
                 }
                 if !f.detail.isEmpty { Text(f.detail).font(.callout).foregroundStyle(.secondary).textSelection(.enabled).fixedSize(horizontal: false, vertical: true) }
+                if !f.fixes.isEmpty { Button { onFix() } label: { Label("Correggi…", systemImage: "wand.and.stars") }.controlSize(.small).padding(.top, 2) }
                 if let t = f.thumb, let img = NSImage(contentsOf: t) { Image(nsImage: img).resizable().scaledToFit().frame(maxHeight: 150).cornerRadius(5).padding(.top, 4) }
             }
         }
         .padding(10).background(RoundedRectangle(cornerRadius: 8).fill(f.sev.color.opacity(0.09))).overlay(RoundedRectangle(cornerRadius: 8).stroke(f.sev.color.opacity(0.35)))
+    }
+}
+
+struct FixBanner: View {
+    let result: FixResult; let undo: () -> Void
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: result.ok ? "checkmark.circle.fill" : "xmark.octagon.fill").foregroundStyle(result.ok ? Color.green : Color.red).font(.system(size: 17))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(result.message).font(.callout.weight(.semibold)).textSelection(.enabled)
+                ForEach(Array(result.lines.enumerated()), id: \.offset) { Text($0.element).font(.callout.monospacedDigit()).foregroundStyle(.secondary).textSelection(.enabled) }
+                if result.ok && result.backup != nil { Button("Annulla la correzione (torna l'originale)") { undo() }.controlSize(.small).padding(.top, 2) }
+            }
+        }.padding(10).frame(maxWidth: .infinity, alignment: .leading).background(RoundedRectangle(cornerRadius: 8).fill((result.ok ? Color.green : Color.red).opacity(0.09)))
     }
 }

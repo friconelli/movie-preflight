@@ -3,7 +3,7 @@ import Vision
 import NaturalLanguage
 
 // MARK: pacchetti: buchi, file troncato, keyframe, sincronia tra flussi
-private func packetTimes(_ fp: String, _ path: String, _ sel: String) -> (pts: [Double], keys: [Double]) {
+func packetTimes(_ fp: String, _ path: String, _ sel: String) -> (pts: [Double], keys: [Double]) {
     let o = run(fp, ["-v", "error", "-select_streams", sel, "-show_entries", "packet=pts_time,flags", "-of", "csv=p=0", path])
     var pts: [Double] = [], keys: [Double] = []
     for l in o.text.split(separator: "\n") {
@@ -104,11 +104,12 @@ func scanCredits(_ pr: Probe, _ path: String, _ tmp: URL, _ c: Collector, progre
     // una segnalazione per ogni gruppo di fotogrammi vicini; la miniatura va copiata prima che la cartella temporanea sparisca
     let outDir = FileManager.default.temporaryDirectory.appendingPathComponent("collaudo-thumbs"); try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
     var lastT = -100.0
+    let startEnd = (hits.filter { $0.0 < 60 }.map(\.0).max() ?? 0) + 2.5, endBegin = (hits.filter { $0.0 >= 60 }.map(\.0).min() ?? d) - 3.5   // margine: i fotogrammi sono campionati ogni 1,5 / 3 s
     for h in hits.sorted(by: { $0.0 < $1.0 }) {
         if h.0 - lastT < 6 { continue }; lastT = h.0
         let dest = outDir.appendingPathComponent(UUID().uuidString + ".jpg"); try? FileManager.default.copyItem(at: h.2, to: dest)
         let where_ = h.0 < 60 ? "nei primi secondi" : "verso la fine"
-        c.add(.error, "Video", "Scritta pubblicitaria o crediti del torrent nell'immagine (\(where_))", "Testo rilevato: «\(String(h.1.prefix(140)))»", time: h.0, thumb: dest)
+        c.add(.error, "Video", "Scritta pubblicitaria o crediti del torrent nell'immagine (\(where_))", "Testo rilevato: «\(String(h.1.prefix(140)))»", time: h.0, thumb: dest, fix: [h.0 < 60 ? .trimStart(startEnd) : .trimEnd(endBegin)])
     }
 }
 
@@ -137,12 +138,12 @@ func scanSubtitles(_ pr: Probe, _ path: String, _ tmp: URL, _ c: Collector) {
         guard let raw = try? String(contentsOf: tmp.appendingPathComponent("sub\(k).srt"), encoding: .utf8) else { c.add(.warn, area, "Impossibile leggere i \(n)", "ffmpeg non è riuscito a estrarre il testo."); continue }
         let cues = parseSRT(raw).filter { !$0.t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.sorted { $0.s < $1.s }
         let forced = disp(s, "forced") == 1
-        if cues.isEmpty { c.add(forced ? .info : .error, area, "Sottotitoli vuoti — \(n)", "La traccia non contiene alcuna battuta."); continue }
+        if cues.isEmpty { c.add(forced ? .info : .error, area, "Sottotitoli vuoti — \(n)", "La traccia non contiene alcuna battuta.", fix: [.dropSub(item.offset)]); continue }
         c.rows("Sottotitoli \(item.offset + 1)", order: 30 + item.offset, [("Battute lette", "\(cues.count)"), ("Prima battuta", hms(cues[0].s)), ("Ultima battuta", hms(cues.last!.e))])
         // pubblicità e crediti
         var ads = 0
-        for q in cues where q.t.has(adPattern) { ads += 1; if ads <= 4 { c.add(.error, area, "Crediti o pubblicità nei sottotitoli — \(n)", "«\(String(q.t.replacingOccurrences(of: "\n", with: " ").prefix(120)))»", time: q.s) } }
-        if ads > 4 { c.add(.error, area, "Altre \(ads - 4) battute con crediti o pubblicità — \(n)", "") }
+        for q in cues where q.t.has(adPattern) { ads += 1; if ads <= 4 { c.add(.error, area, "Crediti o pubblicità nei sottotitoli — \(n)", "«\(String(q.t.replacingOccurrences(of: "\n", with: " ").prefix(120)))»", time: q.s, fix: [.cleanSub(item.offset)]) } }
+        if ads > 4 { c.add(.error, area, "Altre \(ads - 4) battute con crediti o pubblicità — \(n)", "", fix: [.cleanSub(item.offset)]) }
         // lingua
         if let code = langNames[lang(s)]?.nl, !forced, cues.count >= 20 {
             let rec = NLLanguageRecognizer(); var checked = 0, other = 0; var samples: [Cue] = []
@@ -152,7 +153,7 @@ func scanSubtitles(_ pr: Probe, _ path: String, _ tmp: URL, _ c: Collector) {
                 if let b = best, b.key.rawValue != code, b.value > 0.8, want < 0.08 { other += 1; if samples.count < 3 { samples.append(q) } } }
             if checked >= 15 {
                 let pc = Double(other) / Double(checked) * 100
-                if pc > 60 { c.add(.error, area, "Lingua dei sottotitoli diversa da quella dichiarata — \(n)", String(format: "Dichiarati in %@ ma il %.0f%% delle battute è in un'altra lingua.", langLabel(lang(s)), pc), time: samples.first?.s) }
+                if pc > 60 { c.add(.error, area, "Lingua dei sottotitoli diversa da quella dichiarata — \(n)", String(format: "Dichiarati in %@ ma il %.0f%% delle battute è in un'altra lingua.", langLabel(lang(s)), pc), time: samples.first?.s, fix: [.dropSub(item.offset)]) }
                 else if pc > 3 { c.add(.warn, area, String(format: "Parte dei sottotitoli non è in %@ — %@", langLabel(lang(s)), n), String(format: "Circa il %.0f%% delle battute (%d su %d) sembra in un'altra lingua, es.: «%@»", pc, other, checked, String((samples.first?.t ?? "").replacingOccurrences(of: "\n", with: " ").prefix(80))), time: samples.first?.s) }
             }
         }

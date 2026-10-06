@@ -71,6 +71,39 @@ try:
     full = video("trunc_src.mkv"); tr = os.path.join(T, "trunc.mkv"); data = open(full, "rb").read(); open(tr, "wb").write(data[: len(data) // 2])
     o = analyze(tr); check("[PROBLEMA]" in o or "troncato" in o or "non leggibile" in o or "prima del previsto" in o, "file troncato")
     open(os.path.join(T, "junk.mkv"), "w").write("non è un video"); o = analyze(os.path.join(T, "junk.mkv")); check("File non leggibile" in o, "file non video")
+    print("== correzioni")
+    def fix(f, *a): r = subprocess.run([BIN, "--fix", f, *a], capture_output=True, text=True); return r.returncode, r.stdout
+    def probe(f):
+        import json; return json.loads(subprocess.run(["ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", f], capture_output=True, text=True).stdout)
+    def tracks(f, t): return [s for s in probe(f)["streams"] if s["codec_type"] == t]
+    adsrt = os.path.join(T, "ads.srt"); srt(adsrt, [(1, "Subtitles by www.opensubtitles.org")] + [(i * 3 + 10, x) for i, x in enumerate(IT[:20])])
+    def two(name):
+        out = os.path.join(T, name)
+        ff("-f", "lavfi", "-i", f"testsrc2=s=640x360:r=25:d={D}", "-f", "lavfi", "-i", "sine=f=300:d=%d" % D, "-f", "lavfi", "-i", "sine=f=500:d=%d" % D, "-i", adsrt, "-i", os.path.join(T, "en.srt"),
+           "-map", "0:v", "-map", "1:a", "-map", "2:a", "-map", "3", "-map", "4", "-c:v", "libx264", "-preset", "ultrafast", "-g", "25", "-c:a", "aac", "-c:s", "srt",
+           "-metadata:s:a:0", "language=ita", "-metadata:s:a:1", "language=eng", "-metadata:s:s:0", "language=ita", "-metadata:s:s:1", "language=eng", "-disposition:a:0", "default", "-disposition:s:0", "default", out)
+        return out
+    f = two("fix1.mkv"); before = os.path.getsize(f)
+    rc, o = fix(f, "--audio-default", "1", "--sub-default", "none", "--lang", "s1=fra")
+    a, ss = tracks(f, "audio"), tracks(f, "subtitle")
+    check(rc == 0 and a[1]["disposition"]["default"] == 1 and a[0]["disposition"]["default"] == 0, "audio predefinito cambiato (etichette sul posto)")
+    check(all(x["disposition"]["default"] == 0 for x in ss) and ss[1]["tags"]["language"] == "fre", "nessun sottotitolo predefinito e lingua impostata")
+    check(not os.path.exists(f.replace(".mkv", ".orig_backup.mkv")), "solo etichette: nessuna copia di backup")
+    f = two("fix2.mkv"); full = float(probe(f)["format"]["duration"])
+    rc, o = fix(f, "--clean-sub", "0", "--trim-start", "4", "--trim-end", "120", "--normalize", "0")
+    bk = f.replace(".mkv", ".orig_backup.mkv"); np = probe(f)
+    check(rc == 0 and os.path.exists(bk), "correzione di contenuto: l'originale resta come .orig_backup")
+    check(float(np["format"]["duration"]) < full - 14 and float(np["format"]["duration"]) > 100, f"taglio ai fotogrammi chiave (durata {float(np['format']['duration']):.0f} s su {full:.0f})")
+    check([x["codec_name"] for x in tracks(f, "audio")][0] == "ac3" and tracks(f, "audio")[1]["codec_name"] == "aac", "solo la traccia scelta è ricodificata")
+    cues = subprocess.run(["ffmpeg", "-v", "error", "-i", f, "-map", "0:s:0", "-f", "srt", "-"], capture_output=True, text=True).stdout
+    check("opensubtitles" not in cues and "Questa è una frase" in cues, "pubblicità tolta dai sottotitoli, il resto resta")
+    check("prima:" in o and "dopo:" in o, "misura prima/dopo del volume riportata")
+    check(os.path.getsize(bk) > 0 and float(probe(bk)["format"]["duration"]) > full - 1, "l'originale di backup è intatto")
+    f = two("fix3.mkv"); rc, o = fix(f, "--drop-sub", "1", "--drop-audio", "1")
+    check(rc == 0 and len(tracks(f, "audio")) == 1 and len(tracks(f, "subtitle")) == 1, "tracce eliminate")
+    f = two("fix4.mkv"); rc, o = fix(f, "--drop-audio", "0", "--drop-audio", "1"); check(rc != 0 and len(tracks(f, "audio")) == 2, "non si eliminano tutte le tracce audio")
+    rc, o = fix(f, "--audio-default", "5"); check(rc != 0, "traccia predefinita inesistente rifiutata")
+    rc, o = fix(f, "--trim-start", "100000"); check(rc != 0 and not os.path.exists(f.replace(".mkv", ".orig_backup.mkv")), "taglio impossibile: nessuna modifica")
 finally:
     shutil.rmtree(T, ignore_errors=True)
 print(f"\n{ok} controlli ok, {bad} falliti"); sys.exit(1 if bad else 0)

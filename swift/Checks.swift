@@ -66,7 +66,7 @@ func checkAudioStreams(_ pr: Probe, _ c: Collector) {
         rows.append(("Predefinita", disp(s, "default") == 1 ? "sì" : "no"))
         c.rows("Audio \(i + 1)", order: 10 + i, rows)
         let n = "traccia audio \(i + 1)" + (lang(s).isEmpty ? "" : " (\(langLabel(lang(s))))")
-        if lang(s).isEmpty { c.add(.warn, "Audio", "Lingua non indicata — \(n)", "Senza lingua il lettore non sceglie la traccia giusta da solo.") }
+        if lang(s).isEmpty { c.add(.warn, "Audio", "Lingua non indicata — \(n)", "Senza lingua il lettore non sceglie la traccia giusta da solo.", fix: [.setLang("a", i)]) }
         if ch == 1 && a.count > 0 { c.add(.info, "Audio", "Audio mono — \(n)", "In sala uscirà solo da un canale se l'impianto non lo duplica.") }
         if let br = br, br < 64_000 * Double(max(ch, 1)) / 2 && ch <= 2 { c.add(.warn, "Audio", "Bitrate audio basso — \(n)", "\(fmtRate(br)): qualità da telefono, fruscii e suono metallico in sala.") }
         if (dbl(s["sample_rate"]) ?? 48000) < 44100 { c.add(.warn, "Audio", "Campionamento basso — \(n)", "\(Int(dbl(s["sample_rate"]) ?? 0)) Hz: perdita di acuti.") }
@@ -74,8 +74,8 @@ func checkAudioStreams(_ pr: Probe, _ c: Collector) {
         if let st = dbl(s["start_time"]), let vs = dbl(pr.video?["start_time"]), abs(st - vs) > 0.12 { c.add(.warn, "Audio", "Audio e video non partono insieme — \(n)", String(format: "Scarto iniziale di %.0f ms: possibile fuori sincrono.", (st - vs) * 1000)) }
     }
     let defs = a.filter { disp($0, "default") == 1 }.count
-    if a.count > 1 && defs == 0 { c.add(.warn, "Audio", "Nessuna traccia audio predefinita", "Con più tracce, il lettore sceglie a caso.") }
-    if defs > 1 { c.add(.warn, "Audio", "Più tracce audio predefinite", "\(defs) tracce marcate come predefinite: la scelta è ambigua.") }
+    if a.count > 1 && defs == 0 { c.add(.warn, "Audio", "Nessuna traccia audio predefinita", "Con più tracce, il lettore sceglie a caso.", fix: [.defaultAudio(0)]) }
+    if defs > 1 { c.add(.warn, "Audio", "Più tracce audio predefinite", "\(defs) tracce marcate come predefinite: la scelta è ambigua.", fix: [.defaultAudio(a.firstIndex(where: { disp($0, "default") == 1 }) ?? 0)]) }
     let ls = a.map { lang($0) }.filter { !$0.isEmpty }
     if Set(ls).count < ls.count { c.add(.info, "Audio", "Due tracce audio nella stessa lingua", "Controlla che siano davvero diverse (es. stereo e 5.1).") }
 }
@@ -92,8 +92,8 @@ func checkSubStreams(_ pr: Probe, _ c: Collector) {
         if let n = tg["number_of_frames"] { rows.append(("Sottotitoli", n)) }
         c.rows("Sottotitoli \(i + 1)", order: 30 + i, rows)
         let n = "sottotitoli \(i + 1)" + (lang(s).isEmpty ? "" : " (\(langLabel(lang(s)))" + (forced ? ", forzati)" : ")"))
-        if lang(s).isEmpty { c.add(.warn, "Sottotitoli", "Lingua non indicata — \(n)", "Impossibile sceglierli in automatico.") }
-        if disp(s, "default") == 1 && !forced { c.add(.warn, "Sottotitoli", "Sottotitoli attivi di default — \(n)", "Compaiono da soli all'avvio: in sala potrebbero apparire senza volerlo.") }
+        if lang(s).isEmpty { c.add(.warn, "Sottotitoli", "Lingua non indicata — \(n)", "Impossibile sceglierli in automatico.", fix: [.setLang("s", i)]) }
+        if disp(s, "default") == 1 && !forced { c.add(.warn, "Sottotitoli", "Sottotitoli attivi di default — \(n)", "Compaiono da soli all'avvio: in sala potrebbero apparire senza volerlo.", fix: [.defaultSub(nil)]) }
         if imageSubs.contains(codec) { c.add(.info, "Sottotitoli", "Sottotitoli a immagine — \(n)", "Formato \(codec): non si possono controllare nel testo né cambiare dimensione/colore.") }
         if let t = tg["title"]?.lowercased(), (t.contains("forced") || t.contains("forzat")) && !forced { c.add(.warn, "Sottotitoli", "Si chiamano «forzati» ma non sono marcati come tali — \(n)", "Il lettore li tratterà come sottotitoli completi.") }
     }

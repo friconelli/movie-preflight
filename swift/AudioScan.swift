@@ -31,10 +31,10 @@ func scanAudio(_ pr: Probe, _ path: String, _ k: Int, _ c: Collector, progress: 
     c.rows("Audio \(k + 1)", order: 10 + k, rows)
     let ar = "Audio"
     if I < -70 || vals.count < 10 { c.add(.error, ar, "Audio quasi muto — \(n)", "Livello medio \(String(format: "%.0f", I)) LUFS: la traccia sembra vuota."); return }
-    if I < -32 { c.add(.warn, ar, "Audio molto basso — \(n)", String(format: "Volume medio %.1f LUFS: in sala servirà alzare molto il volume e il rumore di fondo salirà.", I)) }
+    if I < -32 { c.add(.warn, ar, "Audio molto basso — \(n)", String(format: "Volume medio %.1f LUFS: in sala servirà alzare molto il volume e il rumore di fondo salirà.", I), fix: [.normalize(k)]) }
     else if I > -16 { c.add(.warn, ar, "Audio molto alto e compresso — \(n)", String(format: "Volume medio %.1f LUFS: tipico di un master per la TV, poca dinamica e rischio di distorsione.", I)) }
     if let p = peak, p > -0.1 { c.add(.warn, ar, "Picchi a 0 dB — \(n)", String(format: "Il picco arriva a %.1f dBFS: possibile distorsione (clipping) nei passaggi forti.", p)) }
-    if let r = lra, r > 26 { c.add(.warn, ar, "Dinamica molto ampia — \(n)", String(format: "Escursione di %.0f LU: il divario tra parti sommesse e forti è grande, in sala i dialoghi possono sembrare bassi rispetto alla musica.", r)) }
+    if let r = lra, r > 26 { c.add(.warn, ar, "Dinamica molto ampia — \(n)", String(format: "Escursione di %.0f LU: il divario tra parti sommesse e forti è grande, in sala i dialoghi possono sembrare bassi rispetto alla musica.", r), fix: [.normalize(k)]) }
     // salti bruschi: media dei 8 s dopo contro i 8 s prima, sui secondi con suono
     let maxT = Int(lastT); var jumps: [(Int, Double)] = []
     if maxT > 40 {
@@ -47,11 +47,11 @@ func scanAudio(_ pr: Probe, _ path: String, _ k: Int, _ c: Collector, progress: 
     }
     if jumps.count >= 10 {
         let top = jumps.sorted { abs($0.1) > abs($1.1) }.prefix(5).sorted { $0.0 < $1.0 }
-        c.add(jumps.count >= 25 ? .warn : .info, ar, "\(jumps.count) salti bruschi di volume — \(n)", "Cambi di livello di oltre 12 LU tra parti con suono: " + top.map { String(format: "%@ (%+.0f)", hms(Double($0.0)), $0.1) }.joined(separator: ", ") + ". Verifica che non sia musica troppo forte rispetto ai dialoghi.", time: Double(top.first!.0))
+        c.add(jumps.count >= 25 ? .warn : .info, ar, "\(jumps.count) salti bruschi di volume — \(n)", "Cambi di livello di oltre 12 LU tra parti con suono: " + top.map { String(format: "%@ (%+.0f)", hms(Double($0.0)), $0.1) }.joined(separator: ", ") + ". Verifica che non sia musica troppo forte rispetto ai dialoghi.", time: Double(top.first!.0), fix: [.normalize(k)])
     }
     if vals.count > 120 {
-        if p95 - p50 > 15 { c.add(.warn, ar, "Musica o effetti molto più forti del parlato tipico — \(n)", String(format: "I passaggi forti sono %.0f LU sopra il livello medio (%.0f contro %.0f LUFS): alzando il volume per i dialoghi, la musica sarà fortissima.", p95 - p50, p95, p50)) }
-        if p50 - p10 > 19 { c.add(.warn, ar, "Passaggi molto sommessi — \(n)", String(format: "Le parti piano sono %.0f LU sotto il livello medio: in sala potrebbero risultare inudibili.", p50 - p10)) }
+        if p95 - p50 > 15 { c.add(.warn, ar, "Musica o effetti molto più forti del parlato tipico — \(n)", String(format: "I passaggi forti sono %.0f LU sopra il livello medio (%.0f contro %.0f LUFS): alzando il volume per i dialoghi, la musica sarà fortissima.", p95 - p50, p95, p50), fix: [.normalize(k)]) }
+        if p50 - p10 > 19 { c.add(.warn, ar, "Passaggi molto sommessi — \(n)", String(format: "Le parti piano sono %.0f LU sotto il livello medio: in sala potrebbero risultare inudibili.", p50 - p10), fix: [.normalize(k)]) }
     }
     // silenzi
     for sl in silences {

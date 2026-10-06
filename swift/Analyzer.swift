@@ -31,6 +31,8 @@ func analyze(_ url: URL, progress: @escaping (Double, String) -> Void = { _, _ i
     let nAudio = min(pr.audio.count, 3)
     let prog = Progress(total: 5 + nAudio) { progress($0, $1) }
     prog.set("0probe", 1, "Lettura dei dati")
+    func info(_ s: [String: Any], _ i: Int) -> TrackInfo { let tg = tags(s); return TrackInfo(ord: i, lang: lang(s), title: tg["title"] ?? "", codec: (s["codec_name"] as? String) ?? "?", channels: Int(dbl(s["channels"]) ?? 0), isDefault: disp(s, "default") == 1, forced: disp(s, "forced") == 1, image: imageSubs.contains((s["codec_name"] as? String) ?? ""), bitrate: dbl(s["bit_rate"]) ?? dbl(tg["bps"]) ?? 0) }
+    rep.audioTracks = pr.audio.enumerated().map { info($1, $0) }; rep.subTracks = pr.subs.enumerated().map { info($1, $0) }
     checkContainer(pr, url, col); checkVideo(pr, col); checkAudioStreams(pr, col); checkSubStreams(pr, col)
 
     let g = DispatchGroup(); let q = DispatchQueue.global(qos: .userInitiated)
