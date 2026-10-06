@@ -22,6 +22,9 @@ Tutto dentro l'app, senza Homebrew (vedi `THIRD_PARTY_NOTICES.md` e `LICENSE`, G
 - **whisper.cpp** (modello «base» da 148 MB, scaricato solo dopo il consenso dell'utente da File → Controlli sul parlato…): lingua realmente parlata di ogni traccia e sincronia dei sottotitoli. Tempi fini = zone di parlato di whisper ∩ energia nella banda della voce; sfasamenti misurati con correlazione di Pearson su 3 tratti del film (spostamento fisso o deriva da frame rate diverso: 25↔23,976 ecc.).
 `tools/bundle_tools.py` copia gli eseguibili e le librerie in `Contents/Resources` riscrivendo i percorsi: verificato eseguendoli in un sandbox che vieta la lettura di `/opt/homebrew`.
 
+## Confronto prima e dopo
+Dopo una correzione, «Confronta prima e dopo» (nel messaggio di esito o nel menu ⋯) mostra: l'esito dei due rapporti, i problemi **risolti**, **ancora presenti** e **nuovi**, le misure prima/dopo (volume, VMAF…) e i dati tecnici diversi; e poi un confronto da guardare e ascoltare: dal punto scelto (barra o «Punti dei problemi») due **fotogrammi affiancati**, il **testo dei sottotitoli** nello stesso istante e **20 secondi di audio** da ascoltare prima/dopo con commutazione A/B senza perdere la posizione.
+
 ## Correzioni
 Dalle segnalazioni (pulsante «Correggi…») o dal pulsante in alto si apre una finestra che mostra tutto quello che verrà fatto, da confermare:
 - traccia **audio predefinita**, **sottotitoli predefiniti** (o nessuno), **lingua** delle tracce senza etichetta;
@@ -41,12 +44,12 @@ Dalle segnalazioni (pulsante «Correggi…») o dal pulsante in alto si apre una
 - immagine: l'interlacciamento deve sparire e il **VMAF** (Netflix) su 3 tratti deve restare ≥ 93 (minimo ≥ 88) rispetto al deinterlacciato ideale.
 Non inclusi: ingrandimento con IA (Real-ESRGAN è troppo lento per un film intero), separazione voce/musica con Demucs (PyTorch, centinaia di MB), OCR dei sottotitoli a immagine, encoder ufficiali Dolby/DTS (non esistono open source).
 
-Sicurezza: solo etichette in un mkv → modifica sul posto con mkvpropedit, senza riscrivere il film. Ogni altra correzione scrive un file temporaneo, lo **verifica** (numero di tracce, durata, buchi nell'audio rispetto all'originale) e solo allora sostituisce; l'originale resta come `<nome>.orig_backup.<ext>` e «Annulla la correzione» lo rimette. Da riga di comando: `dist/moviepreflight --fix film.mkv --audio-default 1 --sub-default none --lang s1=fra --clean-sub 0 --trim-start 4 --normalize 0` (numeri da 0).
+**L'originale non viene mai toccato.** Ogni correzione crea una copia accanto al film, chiamata «Titolo (corretto).ext» (o il nuovo nome, per la rinomina; mai sovrascrive file esistenti). Per le sole etichette in un mkv la copia è un **clone APFS** istantaneo (nessuno spazio in più finché non cambia) e `mkvpropedit` ci lavora dentro; per tutto il resto ffmpeg scrive un file temporaneo, l'app lo **verifica** (numero di tracce, durata, buchi nell'audio rispetto all'originale, qualità) e solo allora lo salva. Le correzioni successive aggiornano la stessa copia corretta; «Elimina la copia corretta» la manda nel Cestino e torna all'originale.
 
 ## Uso
     ./build.sh                       # dist/Movie Preflight.app (+ dist/moviepreflight per la riga di comando)
     dist/moviepreflight --analyze film.mkv # rapporto testuale
-    python3 tests/test_moviepreflight.py   # 65 controlli su film sintetici con difetti noti
+    python3 tests/test_moviepreflight.py   # 69 controlli su film sintetici con difetti noti
 
 Gli strumenti vengono copiati dentro l'app da `tools/bundle_tools.py` (`BUNDLE_FFMPEG=0 ./build.sh` per saltare e usare quelli di /opt/homebrew/bin). Per distribuire l'app pubblicamente tieni conto della licenza di ffmpeg (la build di Homebrew include componenti GPL). Solo Apple Silicon (arm64), macOS 13+. Non modifica mai i file analizzati.
 

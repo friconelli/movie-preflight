@@ -72,7 +72,10 @@ try:
     o = analyze(tr); check("[PROBLEMA]" in o or "troncato" in o or "non leggibile" in o or "prima del previsto" in o, "file troncato")
     open(os.path.join(T, "junk.mkv"), "w").write("non è un video"); o = analyze(os.path.join(T, "junk.mkv")); check("File non leggibile" in o, "file non video")
     print("== correzioni")
-    def fix(f, *a): r = subprocess.run([BIN, "--fix", f, *a], capture_output=True, text=True); return r.returncode, r.stdout
+    def fix(f, *a): r = subprocess.run([BIN, "--fix", f, "--replace", *a], capture_output=True, text=True); return r.returncode, r.stdout   # modifica il file indicato (per le prove sul comportamento)
+    def fixcopy(f, *a): r = subprocess.run([BIN, "--fix", f, *a], capture_output=True, text=True); return r.returncode, r.stdout          # comportamento normale: crea «… (corretto)»
+    import hashlib
+    def sha(f): return hashlib.sha256(open(f, "rb").read()).hexdigest()
     def probe(f):
         import json; return json.loads(subprocess.run(["ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", f], capture_output=True, text=True).stdout)
     def tracks(f, t): return [s for s in probe(f)["streams"] if s["codec_type"] == t]
@@ -89,29 +92,37 @@ try:
     check(rc == 0 and a[1]["disposition"]["default"] == 1 and a[0]["disposition"]["default"] == 0, "audio predefinito cambiato (etichette sul posto)")
     check(all(x["disposition"]["default"] == 0 for x in ss) and ss[1]["tags"]["language"] == "fre", "nessun sottotitolo predefinito e lingua impostata")
     check(not os.path.exists(f.replace(".mkv", ".orig_backup.mkv")), "solo etichette: nessuna copia di backup")
-    f = two("fix2.mkv"); full = float(probe(f)["format"]["duration"])
-    rc, o = fix(f, "--clean-sub", "0", "--trim-start", "4", "--trim-end", "120", "--normalize", "0")
-    bk = f.replace(".mkv", ".orig_backup.mkv"); np = probe(f)
-    check(rc == 0 and os.path.exists(bk), "correzione di contenuto: l'originale resta come .orig_backup")
+    f = two("fix2.mkv"); full = float(probe(f)["format"]["duration"]); orig2 = f; h2 = sha(orig2)
+    rc, o = fixcopy(f, "--clean-sub", "0", "--trim-start", "4", "--trim-end", "120", "--normalize", "0")
+    f = orig2.replace(".mkv", " (corretto).mkv"); np = probe(f) if os.path.exists(f) else {"format": {"duration": "0"}}
+    check(rc == 0 and os.path.exists(f) and sha(orig2) == h2, "correzione di contenuto: nasce «… (corretto)» e l'originale è identico byte per byte")
     check(float(np["format"]["duration"]) < full - 14 and float(np["format"]["duration"]) > 100, f"taglio ai fotogrammi chiave (durata {float(np['format']['duration']):.0f} s su {full:.0f})")
     check([x["codec_name"] for x in tracks(f, "audio")][0] == "ac3" and tracks(f, "audio")[1]["codec_name"] == "aac", "solo la traccia scelta è ricodificata")
     cues = subprocess.run(["ffmpeg", "-v", "error", "-i", f, "-map", "0:s:0", "-f", "srt", "-"], capture_output=True, text=True).stdout
     check("opensubtitles" not in cues and "Questa è una frase" in cues, "pubblicità tolta dai sottotitoli, il resto resta")
     check("prima:" in o and "dopo:" in o, "misura prima/dopo del volume riportata")
-    check(os.path.getsize(bk) > 0 and float(probe(bk)["format"]["duration"]) > full - 1, "l'originale di backup è intatto")
+    check(float(probe(orig2)["format"]["duration"]) > full - 1 and len(tracks(orig2, "subtitle")) == 2, "l'originale ha ancora durata, tracce e sottotitoli di prima")
     f = two("fix3.mkv"); rc, o = fix(f, "--drop-sub", "1", "--drop-audio", "1")
     check(rc == 0 and len(tracks(f, "audio")) == 1 and len(tracks(f, "subtitle")) == 1, "tracce eliminate")
     f = two("fix4.mkv"); rc, o = fix(f, "--drop-audio", "0", "--drop-audio", "1"); check(rc != 0 and len(tracks(f, "audio")) == 2, "non si eliminano tutte le tracce audio")
     rc, o = fix(f, "--audio-default", "5"); check(rc != 0, "traccia predefinita inesistente rifiutata")
-    rc, o = fix(f, "--trim-start", "100000"); check(rc != 0 and not os.path.exists(f.replace(".mkv", ".orig_backup.mkv")), "taglio impossibile: nessuna modifica")
+    rc, o = fixcopy(f, "--trim-start", "100000"); check(rc != 0 and not os.path.exists(f.replace(".mkv", " (corretto).mkv")), "taglio impossibile: nessuna copia creata")
+    print("== l'originale non si tocca mai")
+    o1 = two("intatto.mkv"); h1 = sha(o1); rc, o = fixcopy(o1, "--audio-default", "1", "--lang", "s1=fra", "--forced", "0:1"); c1 = o1.replace(".mkv", " (corretto).mkv")
+    check(rc == 0 and os.path.exists(c1) and sha(o1) == h1, "solo etichette: copia «(corretto)» creata, originale identico byte per byte")
+    check(tracks(c1, "audio")[1]["disposition"]["default"] == 1 and tracks(o1, "audio")[0]["disposition"]["default"] == 1 and tracks(o1, "audio")[1]["disposition"]["default"] == 0, "le etichette cambiano solo nella copia")
+    rc, o = fixcopy(o1, "--clear-title"); c2 = o1.replace(".mkv", " (corretto) 2.mkv")
+    check(rc == 0 and os.path.exists(c2) and os.path.exists(c1), "una seconda correzione non sovrascrive la prima copia")
+    o3 = two("nome.mkv"); h3 = sha(o3); rc, o = fixcopy(o3, "--rename", "Nome Nuovo (2001 - Regista)")
+    check(rc == 0 and os.path.exists(os.path.join(T, "Nome Nuovo (2001 - Regista).mkv")) and os.path.exists(o3) and sha(o3) == h3, "la rinomina crea una copia con il nuovo nome: l'originale resta com'è")
     print("== titolo, HDR→SDR, qualità")
     tt = video("titolo.mkv", meta=["title=Film Bello [HD4ME]"]); o = analyze(tt)
     check("sigla di un gruppo di rilascio" in o, "sigla del gruppo di rilascio nel titolo rilevata")
     rc, o2 = fix(tt, "--clear-title"); o = analyze(tt); check(rc == 0 and "gruppo di rilascio" not in o and "Titolo nei metadati" not in o, "titolo tolto dal contenitore")
     check("Livelli fuori standard" in o and "Blocchettatura" in o, "controlli di segnale e qualità eseguiti")
     hd = video("hdr_tm.mkv", extra=["-x264-params", "colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc"])
-    rc, o = fix(hd, "--tonemap"); v = tracks(hd, "video")[0] if rc == 0 else {}
-    check(rc == 0 and v.get("color_transfer") == "bt709" and "luminanza media" in o and os.path.exists(hd.replace(".mkv", ".orig_backup.mkv")), f"HDR convertito in SDR con controllo della luminanza ({v.get('color_transfer')})")
+    hdc = hd.replace(".mkv", " (corretto).mkv"); rc, o = fixcopy(hd, "--tonemap"); v = tracks(hdc, "video")[0] if rc == 0 else {}
+    check(rc == 0 and v.get("color_transfer") == "bt709" and "luminanza media" in o and tracks(hd, "video")[0].get("color_transfer") == "smpte2084", f"HDR convertito in SDR con controllo della luminanza ({v.get('color_transfer')})")
     rc, o = fix(os.path.join(T, "pulito.mkv"), "--tonemap"); check(rc != 0 and "non è HDR" in o, "conversione HDR rifiutata su un video SDR")
     print("== accenti rovinati, forzati, rinomina, dati del film")
     clean = ["Sì, è così, perché la città è già qui e non c'è più tempo, %d" % i for i in range(25)]
@@ -179,9 +190,9 @@ try:
     print("== deinterlacciamento")
     il = os.path.join(T, "interl.mkv")
     ff("-f", "lavfi", "-i", "mandelbrot=s=640x360:r=25", "-f", "lavfi", "-i", "sine=d=200", "-t", "200", "-map", "0:v", "-map", "1:a", "-vf", "interlace=scan=tff", "-c:v", "libx264", "-preset", "ultrafast", "-flags", "+ilme+ildct", "-b:v", "6M", "-c:a", "aac", il)
-    rc, o = fix(il, "--deinterlace"); np = probe(il) if rc == 0 else {}
-    check(rc == 0 and "VMAF" in o and os.path.exists(il.replace(".mkv", ".orig_backup.mkv")), "deinterlacciamento riuscito con controllo VMAF e backup")
-    check(rc == 0 and tracks(il, "video")[0]["codec_name"] == "h264" and tracks(il, "audio")[0]["codec_name"] == "aac", "audio copiato, video ricodificato nello stesso codec")
+    ilc = il.replace(".mkv", " (corretto).mkv"); hil = sha(il); rc, o = fixcopy(il, "--deinterlace")
+    check(rc == 0 and "VMAF" in o and os.path.exists(ilc) and sha(il) == hil, "deinterlacciamento riuscito con controllo VMAF, originale intatto")
+    check(rc == 0 and tracks(ilc, "video")[0]["codec_name"] == "h264" and tracks(ilc, "audio")[0]["codec_name"] == "aac", "audio copiato, video ricodificato nello stesso codec")
     print("== dialoghi 5.1")
     f51 = os.path.join(T, "surround.mkv")
     ff("-f", "lavfi", "-i", f"testsrc2=s=640x360:r=25:d={D}", "-f", "lavfi", "-i", f"sine=f=300:d={D}", "-filter_complex", "[1]pan=5.1|FL=2.0*c0|FR=2.0*c0|FC=0.8*c0|LFE=0*c0|BL=0*c0|BR=0*c0[a]",
@@ -195,8 +206,8 @@ try:
     fb = os.path.join(T, "surround_ok.mkv")   # centro e fronte vicini (~4 dB): abbassare il centro lo farebbe coprire dalla musica
     ff("-f", "lavfi", "-i", f"testsrc2=s=640x360:r=25:d={D}", "-f", "lavfi", "-i", f"sine=f=300:d={D}", "-filter_complex", "[1]pan=5.1|FL=2.0*c0|FR=2.0*c0|FC=1.3*c0|LFE=0*c0|BL=0*c0|BR=0*c0[a]",
        "-map", "0:v", "-map", "[a]", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "ac3", fb)
-    before_size = os.path.getsize(fb); rc, o = fix(fb, "--boost-center", "0", "--boost-db", "-6")
-    check(rc != 0 and "annullata" in o and os.path.getsize(fb) == before_size and not os.path.exists(fb.replace(".mkv", ".orig_backup.mkv")), "correzione che peggiora i dialoghi: annullata, file intatto, nessun backup")
+    before_size = os.path.getsize(fb); rc, o = fixcopy(fb, "--boost-center", "0", "--boost-db", "-6")
+    check(rc != 0 and "annullata" in o and os.path.getsize(fb) == before_size and not os.path.exists(fb.replace(".mkv", " (corretto).mkv")), "correzione che peggiora i dialoghi: annullata, file intatto, nessuna copia creata")
     pl = os.path.join(T, "pulito.mkv"); rc, o = fix(pl, "--level", "0"); m = re.search(r"dopo:\s+(-?[\d.]+) LUFS", o)
     check(rc == 0 and m is not None and abs(float(m.group(1)) + 24) < 2.5 and "guadagno fisso" in o, f"volume portato a -24 LUFS con guadagno fisso ({m.group(1) if m else '?'} LUFS)")
 finally:

@@ -26,9 +26,20 @@ if let f = arg("--fix").first {
     arg("--clean-sub").compactMap { Int($0) }.forEach { p.cleanSubs.insert($0) }; arg("--drop-sub").compactMap { Int($0) }.forEach { p.dropSubs.insert($0) }
     arg("--drop-audio").compactMap { Int($0) }.forEach { p.dropAudio.insert($0) }; arg("--normalize").compactMap { Int($0) }.forEach { p.normalize.insert($0) }; if let r = arg("--rename").first { p.rename = r }; arg("--repair-sub").compactMap { Int($0) }.forEach { p.repairSubs.insert($0) }; for v in arg("--forced") { let x = v.split(separator: ":"); if x.count == 2, let i = Int(x[0]) { p.forcedFlags[i] = x[1] == "1" } }; if CommandLine.arguments.contains("--tonemap") { p.tonemap = true }; if CommandLine.arguments.contains("--deinterlace") { p.deinterlace = true }; for v in arg("--sync-sub") { let x = v.split(separator: ":").compactMap { Double($0) }; if x.count == 3 { p.syncSubs[Int(x[0])] = (x[1], x[2]) } }; if CommandLine.arguments.contains("--clear-title") { p.clearTitle = true }; arg("--dolby").compactMap { Int($0) }.forEach { p.toDolby.insert($0) }; arg("--level").compactMap { Int($0) }.forEach { p.levelGain.insert($0) }; if let d = arg("--boost-db").first.flatMap({ Double($0) }) { p.centerDB = d }; arg("--boost-center").compactMap { Int($0) }.forEach { p.boostCenter.insert($0) }
     p.trimStart = arg("--trim-start").first.flatMap { Double($0) }; p.trimEnd = arg("--trim-end").first.flatMap { Double($0) }
+    // di default il risultato è una copia «… (corretto)» accanto al file: l'originale non viene mai toccato. --output PATH sceglie il nome, --replace modifica il file indicato (solo per copie già corrette e per i test)
+    let src = URL(fileURLWithPath: f), replace = CommandLine.arguments.contains("--replace")
     var p2 = p; let nb = p2.rename; p2.rename = nil
-    var r = p2.isEmpty ? FixResult(ok: true, message: "") : applyFix(URL(fileURLWithPath: f), p2) { v, s in FileHandle.standardError.write(Data(String(format: "\r%3.0f%% %@                    ", v * 100, s).utf8)) }
-    if r.ok, let nb = nb { let rr = renameFile(URL(fileURLWithPath: f), to: nb); r = FixResult(ok: rr.ok, message: (r.message.isEmpty ? "" : r.message + " ") + rr.message, lines: r.lines, backup: r.backup, newURL: rr.newURL) }
+    let out: URL = arg("--output").first.map { URL(fileURLWithPath: $0) } ?? (replace ? src : correctedURL(for: src, rename: nb))
+    var r: FixResult
+    if p2.isEmpty {
+        if out == src { r = FixResult(ok: true, message: "Nessuna modifica.") }
+        else { do { try cloneFile(src, out); r = FixResult(ok: true, message: "Creata «\(out.lastPathComponent)». L'originale non è stato toccato.", newURL: out) } catch { r = FixResult(ok: false, message: "\(error.localizedDescription)") } }
+    } else { r = applyFix(src, p2, output: out) { v, s in FileHandle.standardError.write(Data(String(format: "\r%3.0f%% %@                    ", v * 100, s).utf8)) } }
+    if r.ok, replace, let nb = nb {   // --replace con --rename: la copia corretta prende il nuovo nome
+        let dest = src.deletingLastPathComponent().appendingPathComponent(nb + "." + src.pathExtension)
+        if FileManager.default.fileExists(atPath: dest.path) { r = FixResult(ok: false, message: "Esiste già un file chiamato «\(dest.lastPathComponent)»: non lo sovrascrivo.") }
+        else if (try? FileManager.default.moveItem(at: src, to: dest)) != nil { r = FixResult(ok: true, message: r.message + " Rinominato in «\(dest.lastPathComponent)».", lines: r.lines, backup: nil, newURL: dest) }
+    }
     FileHandle.standardError.write(Data("\n".utf8)); print((r.ok ? "OK: " : "ERRORE: ") + r.message); r.lines.forEach { print("  " + $0) }; exit(r.ok ? 0 : 1)
 }
 MoviePreflightApp.main()

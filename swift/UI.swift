@@ -6,6 +6,8 @@ final class Job: ObservableObject, Identifiable {
     let id = UUID(); @Published var url: URL
     @Published var progress = 0.0; @Published var stage = "In coda"; @Published var report: Report?
     @Published var fixProgress: Double?; @Published var fixStage = ""; @Published var fixResult: FixResult?
+    @Published var origURL: URL?; @Published var origReport: Report?; @Published var fixLog: [String] = []   // originale (mai toccato) e suo rapporto, per il confronto prima/dopo
+    var hasCorrected: Bool { origURL != nil && origURL != url }
     init(_ u: URL) { url = u }
 }
 final class Store: ObservableObject {
@@ -26,7 +28,11 @@ final class Store: ObservableObject {
         q.async { [weak j] in
             guard let j = j else { return }
             let r = analyze(j.url) { p, s in DispatchQueue.main.async { j.progress = p; j.stage = s } }
-            DispatchQueue.main.async { j.report = r; j.progress = 1 }
+            DispatchQueue.main.async {
+                j.report = r; j.progress = 1
+                if ProcessInfo.processInfo.environment["MOVIEPREFLIGHT_AUTOFIX"] != nil, j.origURL == nil {   // solo per le prove a vista: applica le correzioni sicure senza chiedere
+                    var p = FixPlan(); r.findings.forEach { $0.fixes.filter { !isHeavy($0) }.forEach { p.merge($0) } }; p.rename = nil; if !p.isEmpty { self.fix(j, p) } }
+            }
         }
     }
     /// Chiede il consenso e scarica il modello vocale (whisper, open source, 148 MB) per i controlli sulla lingua parlata e sulla sincronia dei sottotitoli.
@@ -50,13 +56,25 @@ final class Store: ObservableObject {
     /// Applica una correzione (una per volta, dopo l'analisi in corso) e poi rianalizza il film per mostrare l'effetto.
     func fix(_ j: Job, _ plan: FixPlan) {
         var p = plan; let newBase = p.rename; p.rename = nil
+        let source = j.url, editing = j.hasCorrected, orig = j.origURL ?? j.url, origReport = j.origReport ?? j.report
+        let output = editing ? j.url : correctedURL(for: j.url, rename: newBase)
         j.fixProgress = 0; j.fixStage = "In attesa…"; j.fixResult = nil
         q.async {
-            var r = p.isEmpty ? FixResult(ok: true, message: "") : applyFix(j.url, p) { v, s in DispatchQueue.main.async { j.fixProgress = v; j.fixStage = s } }
-            if r.ok, let nb = newBase { let rr = renameFile(j.url, to: nb); r = FixResult(ok: rr.ok, message: (r.message.isEmpty ? "" : r.message + " ") + rr.message, lines: r.lines, backup: r.backup, newURL: rr.newURL) }
-            let target = r.newURL ?? j.url
+            var r: FixResult
+            if p.isEmpty {
+                if editing { r = FixResult(ok: true, message: "Nessuna modifica al contenuto.", newURL: output) }
+                else { do { try cloneFile(source, output); r = FixResult(ok: true, message: "Creata «\(output.lastPathComponent)» (copia istantanea). L'originale non è stato toccato.", newURL: output) } catch { r = FixResult(ok: false, message: "Non riesco a creare la copia: \(error.localizedDescription)") } }
+            } else { r = applyFix(source, p, output: output) { v, s in DispatchQueue.main.async { j.fixProgress = v; j.fixStage = s } } }
+            if r.ok, editing, let nb = newBase {   // rinomina della copia corretta (è un file dell'app, non l'originale)
+                let dest = correctedURL(for: output, rename: nb)
+                if (try? FileManager.default.moveItem(at: output, to: dest)) != nil { r = FixResult(ok: true, message: r.message + " Rinominata in «\(dest.lastPathComponent)».", lines: r.lines, backup: nil, newURL: dest) }
+            }
+            let target = r.newURL ?? output
             let rep = r.ok ? analyze(target) : nil
-            DispatchQueue.main.async { if let u = r.newURL { j.url = u }; j.fixResult = r; j.fixProgress = nil; if let rep = rep { j.report = rep } }
+            DispatchQueue.main.async {
+                if r.ok { if j.origURL == nil { j.origURL = orig; j.origReport = origReport }; j.url = target; j.fixLog += r.lines }
+                j.fixResult = r; j.fixProgress = nil; if let rep = rep { j.report = rep }
+            }
         }
     }
     /// Mostra tutto quello che verrà fatto e applica solo dopo il consenso (Correggi / Altre opzioni… / Annulla).
@@ -64,9 +82,18 @@ final class Store: ObservableObject {
         guard let rep = j.report else { return }
         let lines = plan.summary(rep); guard !lines.isEmpty else { return }
         let a = NSAlert(); a.messageText = lines.count == 1 ? "Correggere questo?" : "Correggere queste cose?"
-        a.informativeText = lines.map { "• " + $0 }.joined(separator: "\n") + "\n\n" + (plan.changesContent ? "L'originale resta nella stessa cartella come «\(backupURL(for: j.url).lastPathComponent)» e potrai annullare." : "Cambiano solo etichette o nome del file: nessuna riscrittura del film.")
+        let dest = j.hasCorrected ? "La copia corretta «\(j.url.lastPathComponent)» verrà aggiornata." : "Verrà creata la copia «\(correctedURL(for: j.url, rename: plan.rename).lastPathComponent)» accanto al film."
+        a.informativeText = lines.map { "• " + $0 }.joined(separator: "\n") + "\n\n" + dest + " L'originale non viene mai modificato e potrai confrontare prima e dopo."
         a.addButton(withTitle: "Correggi"); a.addButton(withTitle: "Altre opzioni…"); a.addButton(withTitle: "Annulla")
         switch a.runModal() { case .alertFirstButtonReturn: fix(j, plan); case .alertSecondButtonReturn: more(); default: break }
+    }
+    /// Elimina la copia corretta (va nel Cestino) e torna all'originale, che non è mai stato toccato.
+    func discardCorrected(_ j: Job) {
+        guard j.hasCorrected, let o = j.origURL else { return }
+        let a = NSAlert(); a.messageText = "Eliminare la copia corretta?"; a.informativeText = "«\(j.url.lastPathComponent)» va nel Cestino. L'originale «\(o.lastPathComponent)» resta com'è."
+        a.addButton(withTitle: "Elimina la copia"); a.addButton(withTitle: "Annulla"); guard a.runModal() == .alertFirstButtonReturn else { return }
+        try? FileManager.default.trashItem(at: j.url, resultingItemURL: nil)
+        j.url = o; j.report = j.origReport; j.origURL = nil; j.origReport = nil; j.fixResult = nil; j.fixLog = []
     }
     /// Consenso alle ricerche online (solo il titolo ricavato dal nome del file viene inviato a Wikidata e Wikipedia).
     func askOnline(force: Bool = false) {
@@ -77,18 +104,6 @@ final class Store: ObservableObject {
         a.addButton(withTitle: UserDefaults.standard.bool(forKey: "metaConsent") ? "Lascia attivo" : "Consenti"); a.addButton(withTitle: UserDefaults.standard.bool(forKey: "metaConsent") ? "Disattiva" : "Non ora")
         let yes = a.runModal() == .alertFirstButtonReturn; UserDefaults.standard.set(yes, forKey: "metaConsent"); onlineLookups = yes
     }
-    /// Annulla l'ultima correzione: il file corrente va nel Cestino e torna l'originale conservato.
-    func restore(_ j: Job) {
-        guard let b = j.fixResult?.backup else { return }
-        j.fixProgress = 0; j.fixStage = "Ripristino dell'originale…"
-        q.async {
-            var msg = FixResult(ok: true, message: "Originale ripristinato.")
-            do { try FileManager.default.trashItem(at: j.url, resultingItemURL: nil); try FileManager.default.moveItem(at: b, to: j.url) } catch { msg = FixResult(ok: false, message: "Ripristino non riuscito: \(error.localizedDescription)") }
-            let rep = analyze(j.url)
-            DispatchQueue.main.async { j.fixResult = msg; j.fixProgress = nil; j.report = rep }
-        }
-    }
-    init() { onlineLookups = UserDefaults.standard.bool(forKey: "metaConsent") }
     func open() { let p = NSOpenPanel(); p.allowsMultipleSelection = true; p.canChooseDirectories = true; p.message = "Scegli uno o più film"; if p.runModal() == .OK { add(p.urls) } }
 }
 
@@ -143,14 +158,17 @@ struct JobRow: View {
     }
 }
 struct FixBanner: View {
-    let result: FixResult; let undo: () -> Void
+    let result: FixResult; var compare: (() -> Void)?; var reveal: (() -> Void)?; var discard: (() -> Void)?
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: result.ok ? "checkmark.circle.fill" : "xmark.octagon.fill").foregroundStyle(result.ok ? Color.green : Color.red).font(.system(size: 17))
             VStack(alignment: .leading, spacing: 3) {
                 Text(result.message).font(.callout.weight(.semibold)).textSelection(.enabled)
                 ForEach(Array(result.lines.enumerated()), id: \.offset) { Text($0.element).font(.callout.monospacedDigit()).foregroundStyle(.secondary).textSelection(.enabled) }
-                if result.ok && result.backup != nil { Button("Annulla la correzione (torna l'originale)") { undo() }.controlSize(.small).padding(.top, 2) }
+                if result.ok && (compare != nil) { HStack {
+                    Button { compare?() } label: { Label("Confronta prima e dopo", systemImage: "rectangle.split.2x1") }.controlSize(.small).buttonStyle(.borderedProminent)
+                    Button("Mostra nel Finder") { reveal?() }.controlSize(.small)
+                    Button("Elimina la copia corretta") { discard?() }.controlSize(.small) }.padding(.top, 3) }
             }
         }.padding(10).frame(maxWidth: .infinity, alignment: .leading).background(RoundedRectangle(cornerRadius: 8).fill((result.ok ? Color.green : Color.red).opacity(0.09)))
     }

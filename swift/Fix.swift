@@ -93,14 +93,25 @@ func measureLoudness(_ path: String, _ ord: Int, progress: ((Double) -> Void)? =
 private func lufs(_ m: (Double, Double, Double)) -> String { String(format: "%.1f LUFS · LRA %.1f LU · picco %+.1f dBFS", m.0, m.1, m.2) }
 private func secs(_ s: Double) -> String { String(format: "%.3f", s) }
 
-func backupURL(for url: URL) -> URL {
-    let dir = url.deletingLastPathComponent(), base = url.deletingPathExtension().lastPathComponent, ext = url.pathExtension
-    var n = 1; var u = dir.appendingPathComponent("\(base).orig_backup.\(ext)")
-    while FileManager.default.fileExists(atPath: u.path) { n += 1; u = dir.appendingPathComponent("\(base).orig_backup\(n).\(ext)") }
+/// Copia istantanea (clone APFS: nessuno spazio in più finché non cambia) o, se non è possibile, copia normale.
+func cloneFile(_ src: URL, _ dst: URL) throws {
+    if clonefile(src.path, dst.path, 0) == 0 { return }
+    try FileManager.default.copyItem(at: src, to: dst)
+}
+/// Dove salvare la versione corretta: accanto all'originale, con il nome nuovo (se c'è) o «… (corretto)»; mai su un file che esiste già.
+func correctedURL(for url: URL, rename: String? = nil) -> URL {
+    let dir = url.deletingLastPathComponent(), ext = url.pathExtension, orig = url.deletingPathExtension().lastPathComponent
+    var base = (rename ?? "").replacingOccurrences(of: "/", with: "-").trimmingCharacters(in: .whitespaces)
+    if base.isEmpty || base == orig { base = orig + " (corretto)" }
+    var u = dir.appendingPathComponent(base + "." + ext), n = 1
+    while FileManager.default.fileExists(atPath: u.path) { n += 1; u = dir.appendingPathComponent("\(base) \(n)." + ext) }
     return u
 }
 
-func applyFix(_ url: URL, _ plan: FixPlan, progress: @escaping (Double, String) -> Void) -> FixResult {
+/// Applica le correzioni a `url` scrivendo il risultato in `output`. L'originale non viene mai toccato, tranne quando `output` coincide con `url`
+/// (modifica di una copia corretta che l'app ha già creato).
+func applyFix(_ url: URL, _ plan: FixPlan, output: URL, progress: @escaping (Double, String) -> Void) -> FixResult {
+    let inPlace = output.standardizedFileURL.path == url.standardizedFileURL.path
     guard let ff = tool("ffmpeg"), let fp = tool("ffprobe"), let pr = Probe(url.path) else { return FixResult(ok: false, message: "ffmpeg non trovato o file illeggibile.") }
     let ext = url.pathExtension.lowercased(), path = url.path
     let audio = pr.audio, subs = pr.subs; var lines: [String] = []
@@ -121,7 +132,9 @@ func applyFix(_ url: URL, _ plan: FixPlan, progress: @escaping (Double, String) 
     // 1) solo etichette in un mkv: si modifica l'intestazione sul posto, senza riscrivere il film
     if !plan.changesContent, ext == "mkv", let mp = tool("mkvpropedit") {
         progress(0.1, "Modifica delle etichette…")
-        var a = [path]
+        if !inPlace { do { try cloneFile(url, output) } catch { return FixResult(ok: false, message: "Non riesco a creare la copia: \(error.localizedDescription)") } }
+        func discard() { if !inPlace { try? FileManager.default.removeItem(at: output) } }
+        var a = [output.path]
         if plan.clearTitle { a += ["--edit", "info", "--delete", "title"] }
         for (i, _) in audio.enumerated() {
             var sets: [String] = []
@@ -136,18 +149,18 @@ func applyFix(_ url: URL, _ plan: FixPlan, progress: @escaping (Double, String) 
             if let f = plan.forcedFlags[i] { sets += ["flag-forced=\(f ? 1 : 0)"]; lines.append("Sottotitoli \(i + 1): etichetta «forzati» \(f ? "impostata" : "tolta")") }
             for s in sets { a += ["--edit", "track:s\(i + 1)", "--set", s] }
         }
-        let o = run(mp, a); if o.status > 1 { return FixResult(ok: false, message: "mkvpropedit non è riuscito: \(o.text.suffix(200))") }
+        let o = run(mp, a); if o.status > 1 { discard(); return FixResult(ok: false, message: "mkvpropedit non è riuscito: \(o.text.suffix(200)). L'originale non è stato toccato.") }
         // verifica rileggendo il file
-        guard let np = Probe(path) else { return FixResult(ok: false, message: "Dopo la modifica il file non è più leggibile: ripristinalo da una copia.") }
-        if let d = plan.audioDefault { lines.append("Traccia audio predefinita: \(d + 1)"); if disp(np.audio[d], "default") != 1 { return FixResult(ok: false, message: "La modifica non risulta applicata.") } }
+        guard let np = Probe(output.path) else { discard(); return FixResult(ok: false, message: "La copia modificata non è leggibile: l'originale non è stato toccato.") }
+        if let d = plan.audioDefault { lines.append("Traccia audio predefinita: \(d + 1)"); if disp(np.audio[d], "default") != 1 { discard(); return FixResult(ok: false, message: "La modifica non risulta applicata: l'originale non è stato toccato.") } }
         switch plan.subDefault { case .none: lines.append("Nessun sottotitolo predefinito"); case .track(let k): lines.append("Sottotitoli predefiniti: traccia \(k + 1)"); case .keep: break }
         if plan.clearTitle { lines.append("Titolo del contenitore tolto") }
         for (k, v) in plan.lang.sorted(by: { $0.key < $1.key }) { lines.append("Lingua \(k.hasPrefix("a") ? "audio" : "sottotitoli") \(Int(k.dropFirst())! + 1): \(langLabel(v))") }
-        progress(1, "Fatto"); return FixResult(ok: true, message: "Etichette aggiornate sul posto (nessuna riscrittura del film).", lines: lines)
+        progress(1, "Fatto"); return FixResult(ok: true, message: inPlace ? "Etichette aggiornate nella copia corretta." : "Creata «\(output.lastPathComponent)» (copia istantanea con le sole etichette cambiate). L'originale non è stato toccato.", lines: lines, backup: nil, newURL: output)
     }
 
     // 2) riscrittura con ffmpeg su un file temporaneo accanto all'originale
-    let dir = url.deletingLastPathComponent(), base = url.deletingPathExtension().lastPathComponent
+    let dir = output.deletingLastPathComponent(), base = output.deletingPathExtension().lastPathComponent
     if let free = (try? dir.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?.volumeAvailableCapacityForImportantUsage, Double(free) < pr.size * 1.05 + 1e8 {
         return FixResult(ok: false, message: "Spazio insufficiente: servono almeno \(fmtBytes(pr.size * 1.05)) liberi.")
     }
@@ -303,28 +316,15 @@ func applyFix(_ url: URL, _ plan: FixPlan, progress: @escaping (Double, String) 
         }
         if af.2 > -0.1 { warn = " Attenzione: il picco dopo la correzione è molto alto." }
     }
-    // sostituzione: l'originale diventa .orig_backup (se si è toccato il contenuto) oppure va nel Cestino (solo etichette)
-    progress(0.97, "Sostituzione del file…")
-    let old = (try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date) ?? nil
-    var bk: URL?
+    // il risultato diventa il file di uscita; l'originale non viene mai toccato (a meno che non si stia correggendo una copia già corretta)
+    progress(0.97, "Salvataggio…")
     do {
-        if plan.changesContent { let b = backupURL(for: url); try FileManager.default.moveItem(at: url, to: b); bk = b }
-        else { try FileManager.default.trashItem(at: url, resultingItemURL: nil) }
-        try FileManager.default.moveItem(at: tmp, to: url)
-    } catch { if let b = bk { try? FileManager.default.moveItem(at: b, to: url) }; return FixResult(ok: false, message: "Sostituzione non riuscita: \(error.localizedDescription)") }
-    if let d = old { try? FileManager.default.setAttributes([.modificationDate: d], ofItemAtPath: path) }
+        if inPlace { _ = try FileManager.default.replaceItemAt(output, withItemAt: tmp) }
+        else {
+            if FileManager.default.fileExists(atPath: output.path) { return FixResult(ok: false, message: "Esiste già «\(output.lastPathComponent)»: non lo sovrascrivo. L'originale non è stato toccato.") }
+            try FileManager.default.moveItem(at: tmp, to: output)
+        }
+    } catch { return FixResult(ok: false, message: "Salvataggio non riuscito: \(error.localizedDescription). L'originale non è stato toccato.") }
     progress(1, "Fatto")
-    let msg = plan.changesContent ? "Fatto. L'originale è stato conservato come «\(bk!.lastPathComponent)».\(warn)" : "Fatto. Etichette aggiornate (la versione precedente è nel Cestino)."
-    return FixResult(ok: true, message: msg, lines: lines, backup: bk)
-}
-
-/// Rinomina il file nella stessa cartella (nessuna sovrascrittura).
-func renameFile(_ url: URL, to base: String) -> FixResult {
-    let clean = base.replacingOccurrences(of: "/", with: "-").trimmingCharacters(in: .whitespaces)
-    guard !clean.isEmpty else { return FixResult(ok: false, message: "Nome non valido.") }
-    let dest = url.deletingLastPathComponent().appendingPathComponent(clean + "." + url.pathExtension)
-    if dest.path == url.path { return FixResult(ok: true, message: "Il file ha già questo nome.") }
-    if FileManager.default.fileExists(atPath: dest.path) { return FixResult(ok: false, message: "Esiste già un file chiamato «\(dest.lastPathComponent)»: non lo sovrascrivo.") }
-    do { try FileManager.default.moveItem(at: url, to: dest) } catch { return FixResult(ok: false, message: "Rinomina non riuscita: \(error.localizedDescription)") }
-    return FixResult(ok: true, message: "Rinominato in «\(dest.lastPathComponent)».", lines: [], backup: nil, newURL: dest)
+    return FixResult(ok: true, message: (inPlace ? "Copia corretta aggiornata." : "Creata «\(output.lastPathComponent)». L'originale non è stato toccato.") + warn, lines: lines, backup: nil, newURL: output)
 }

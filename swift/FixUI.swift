@@ -70,8 +70,8 @@ struct FixSheet: View {
                 let p = effective
                 if p.isEmpty { Text("Scegli qualcosa da correggere.").foregroundStyle(.secondary) }
                 else {
-                    Text(p.changesContent ? "L'originale verrà conservato come «\(backupURL(for: url).lastPathComponent)» nella stessa cartella." : (url.pathExtension.lowercased() == "mkv" ? "Si modificano solo le etichette, direttamente nel file: il film non viene riscritto." : "Si modificano solo le etichette: il file viene riscritto senza ricodifica e la versione precedente va nel Cestino.")).font(.callout)
-                    if p.changesContent { Text("Dopo la scrittura il nuovo file viene controllato (tracce, durata, buchi nell'audio); se qualcosa non torna l'originale non viene toccato.").font(.caption).foregroundStyle(.secondary) }
+                    Text(job.hasCorrected ? "La copia corretta «\(url.lastPathComponent)» verrà aggiornata: l'originale non viene toccato." : "Verrà creata la copia «\(correctedURL(for: url, rename: p.rename).lastPathComponent)» accanto al film: l'originale non viene mai modificato e potrai confrontare prima e dopo.").font(.callout)
+                    Text(p.changesContent ? "Dopo la scrittura il nuovo file viene controllato (tracce, durata, buchi nell'audio, qualità); se qualcosa non torna non viene creato nulla." : (url.pathExtension.lowercased() == "mkv" ? "Cambiano solo le etichette: la copia è istantanea e non occupa spazio in più." : "Cambiano solo le etichette: il film viene copiato senza ricodifica.")).font(.caption).foregroundStyle(.secondary)
                 }
                 HStack { Spacer(); Button("Annulla") { dismiss() }.keyboardShortcut(.cancelAction)
                     Button("Applica") { let p = effective; store.fix(job, p); } .keyboardShortcut(.defaultAction).disabled(p.isEmpty) }

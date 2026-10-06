@@ -40,7 +40,7 @@ func fixItems(_ r: Report) -> [FixItem] {
 
 struct JobDetail: View {
     @ObservedObject var job: Job; let store: Store
-    @State private var sheetPlan: FixPlan?; @State private var showNotes = false; @State private var showTech = false
+    @State private var sheetPlan: FixPlan?; @State private var showNotes = false; @State private var showTech = false; @State private var showCompare = false
     func plan(_ hints: [FixHint]) -> FixPlan { var p = FixPlan(); hints.forEach { p.merge($0) }; return p }
     var body: some View {
         if let r = job.report {
@@ -49,7 +49,7 @@ struct JobDetail: View {
             let notes = r.findings.filter { $0.fixes.isEmpty && $0.sev == .info }
             ScrollView { VStack(alignment: .leading, spacing: 22) {
                 header(r)
-                if let fr = job.fixResult { FixBanner(result: fr) { store.restore(job) } }
+                if let fr = job.fixResult { FixBanner(result: fr, compare: job.hasCorrected ? { showCompare = true } : nil, reveal: { NSWorkspace.shared.activateFileViewerSelecting([job.url]) }, discard: { store.discardCorrected(job) }) }
                 if job.fixProgress != nil { HStack(spacing: 10) { ProgressView(value: job.fixProgress).frame(width: 220); Text(job.fixStage).font(.callout).foregroundStyle(.secondary) } }
                 if items.isEmpty && todo.isEmpty { HStack(spacing: 8) { Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).font(.title3); Text("Tutto a posto: niente da sistemare.").font(.headline) } }
                 if !items.isEmpty { fixSection(r, items) }
@@ -66,8 +66,10 @@ struct JobDetail: View {
                     ForEach(r.tech.sorted { $0.order < $1.order }) { s in VStack(alignment: .leading, spacing: 3) { Text(s.title).font(.subheadline.weight(.semibold)).padding(.top, 4)
                         ForEach(s.rows) { row in HStack(alignment: .top) { Text(row.k).foregroundStyle(.secondary).frame(width: 190, alignment: .leading); Text(row.v).textSelection(.enabled) }.font(.callout) } } } }.padding(.top, 6) }.font(.headline)
             }.padding(24).frame(maxWidth: 760, alignment: .leading) }
+            .sheet(isPresented: $showCompare) { CompareView(job: job) }
             .sheet(isPresented: Binding(get: { sheetPlan != nil }, set: { if !$0 { sheetPlan = nil } })) { FixSheet(job: job, report: r, plan: sheetPlan ?? FixPlan(), store: store) }
             .onChange(of: job.fixProgress != nil) { running in if !running { sheetPlan = nil } }
+            .onChange(of: job.hasCorrected) { c in if c && ProcessInfo.processInfo.environment["MOVIEPREFLIGHT_OPENCOMPARE"] != nil { showCompare = true } }
             .onAppear { if ProcessInfo.processInfo.environment["MOVIEPREFLIGHT_SHEET"] != nil { var p = FixPlan(); r.findings.forEach { $0.fixes.forEach { p.merge($0) } }; sheetPlan = p } }   // solo per le prove a vista
         } else {
             VStack(spacing: 12) {
@@ -84,6 +86,7 @@ struct JobDetail: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text(r.meta?.title ?? r.file.deletingPathExtension().lastPathComponent).font(.title2.weight(.semibold)).lineLimit(2)
                 Text(subtitle(r)).font(.callout).foregroundStyle(.secondary).lineLimit(2)
+                if job.hasCorrected, let o = job.origURL { HStack(spacing: 6) { Image(systemName: "doc.on.doc"); Text("Copia corretta di «\(o.lastPathComponent)» — l'originale non è stato toccato") }.font(.caption).foregroundStyle(.secondary) }
                 HStack(spacing: 6) { Image(systemName: r.worst.symbol); Text(r.verdict).fontWeight(.medium) }.font(.callout).foregroundStyle(r.worst.color).padding(.horizontal, 10).padding(.vertical, 4).background(Capsule().fill(r.worst.color.opacity(0.12)))
                 if let s = r.meta?.summary { Text(s).font(.caption).foregroundStyle(.secondary).lineLimit(3).padding(.top, 2) }
             }
@@ -91,6 +94,7 @@ struct JobDetail: View {
             Menu {
                 Button("Rianalizza") { store.startAnalysis(job) }
                 Button("Correggi a mano…") { sheetPlan = FixPlan() }
+                if job.hasCorrected { Divider(); Button("Confronta prima e dopo…") { showCompare = true }; Button("Mostra nel Finder") { NSWorkspace.shared.activateFileViewerSelecting([job.url]) }; Button("Elimina la copia corretta…") { store.discardCorrected(job) } }
                 Divider()
                 Button("Copia il rapporto") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(r.text, forType: .string) }
                 Button("Salva il rapporto…") { save(r) }
