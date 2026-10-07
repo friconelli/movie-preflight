@@ -11,16 +11,31 @@ struct TrackInfo: Identifiable { var id: Int { ord }; var ord: Int; var lang: St
 struct KV: Identifiable { let id = UUID(); var k: String; var v: String }
 struct Section: Identifiable { let id = UUID(); var title: String; var order: Int; var rows: [KV] }
 
+/// Indispensabile per la sala = visibile o udibile dal pubblico, oppure rompe la riproduzione. Tutto il resto è una miglioria facoltativa.
+func isEssential(_ f: Finding) -> Bool {
+    if f.sev == .error { return true }
+    guard f.sev == .warn else { return false }
+    let essentialWarnings = ["Sottotitoli attivi di default", "La lingua parlata non corrisponde", "sfasati", "si sfasano", "finiscono molto prima del film", "più lunghi del film", "iniziano molto tardi",
+                             "Buco nel flusso video", "Buco nell'audio", "L'audio finisce prima", "finiscono a istanti diversi", "non partono insieme", "Errori di decodifica", "Schermo nero di",
+                             "HDR (", "Dolby Vision profilo 5", "Video interlacciato", "dura meno del previsto"]
+    return essentialWarnings.contains { f.title.contains($0) }
+}
+
 struct Report {
     var file: URL; var duration = 0.0; var findings: [Finding] = []; var tech: [Section] = []; var seconds = 0.0; var audioTracks: [TrackInfo] = []; var subTracks: [TrackInfo] = []; var meta: MovieMeta?
-    var worst: Sev { findings.map(\.sev).max() ?? .ok }
+    var essential: [Finding] { findings.filter { $0.sev > .ok && isEssential($0) } }      // indispensabili per andare in sala
+    var extras: [Finding] { findings.filter { $0.sev > .ok && !isEssential($0) } }        // migliorie facoltative e note
+    var worst: Sev { essential.map(\.sev).max() ?? .ok }                                  // il verdetto dipende solo dalle indispensabili
     var verdict: String { switch worst { case .error: return "Problemi da risolvere"; case .warn: return "Da controllare"; default: return "Pronto per la sala" } }
-    var counts: (err: Int, warn: Int, info: Int) { (findings.filter { $0.sev == .error }.count, findings.filter { $0.sev == .warn }.count, findings.filter { $0.sev == .info }.count) }
     var text: String {
-        var s = "MOVIE PREFLIGHT — \(file.lastPathComponent)\nEsito: \(verdict)  (\(counts.err) problemi, \(counts.warn) attenzioni, \(counts.info) note)\n\n"
-        for f in findings.sorted(by: { $0.sev > $1.sev }) where f.sev > .ok {
-            s += "[\(f.sev.label.uppercased())] \(f.area): \(f.title)" + (f.time.map { " (a \(hms($0)))" } ?? "") + "\n" + (f.detail.isEmpty ? "" : "    \(f.detail.replacingOccurrences(of: "\n", with: "\n    "))\n")
+        var s = "MOVIE PREFLIGHT — \(file.lastPathComponent)\nEsito: \(verdict)  (\(essential.count) indispensabili per la sala, \(extras.count) migliorie facoltative)\n"
+        func block(_ title: String, _ fs: [Finding]) {
+            guard !fs.isEmpty else { return }; s += "\n\(title)\n"
+            for f in fs.sorted(by: { $0.sev > $1.sev }) {
+                s += "[\(f.sev.label.uppercased())] \(f.area): \(f.title)" + (f.time.map { " (a \(hms($0)))" } ?? "") + "\n" + (f.detail.isEmpty ? "" : "    \(f.detail.replacingOccurrences(of: "\n", with: "\n    "))\n")
+            }
         }
+        block("INDISPENSABILE PER LA SALA", essential); block("MIGLIORIE FACOLTATIVE", extras)
         s += "\nDATI TECNICI\n"
         for sec in tech.sorted(by: { $0.order < $1.order }) { s += "\n\(sec.title)\n"; for r in sec.rows { s += "  \(r.k): \(r.v)\n" } }
         return s

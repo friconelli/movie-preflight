@@ -27,13 +27,13 @@ func fixLabel(_ h: FixHint) -> String {
 func isHeavy(_ h: FixHint) -> Bool { switch h { case .dropSub, .deinterlace, .tonemap, .normalize: return true; default: return false } }
 
 /// Una correzione proposta, con le segnalazioni che la richiedono raggruppate (es. 40 battute con pubblicità = una sola voce).
-struct FixItem: Identifiable { let id: String; var sev: Sev; var title: String; var detail: String; var hints: [FixHint]; var count: Int; var thumb: URL?; var times: [Double]; var area: String }
+struct FixItem: Identifiable { let id: String; var sev: Sev; var title: String; var detail: String; var hints: [FixHint]; var count: Int; var thumb: URL?; var times: [Double]; var area: String; var essential: Bool }
 func fixItems(_ r: Report) -> [FixItem] {
     var out: [FixItem] = []; var idx: [String: Int] = [:]
     for f in r.findings.sorted(by: { $0.sev > $1.sev }) where !f.fixes.isEmpty && f.sev > .ok {
         let key = f.fixes.map { String(describing: $0) }.joined(separator: "|")
-        if let i = idx[key] { out[i].count += 1; out[i].sev = max(out[i].sev, f.sev); if let t = f.time { out[i].times.append(t) }; if out[i].thumb == nil { out[i].thumb = f.thumb } }
-        else { idx[key] = out.count; out.append(FixItem(id: key, sev: f.sev, title: f.title, detail: f.detail, hints: f.fixes, count: 1, thumb: f.thumb, times: f.time.map { [$0] } ?? [], area: f.area)) }
+        if let i = idx[key] { out[i].count += 1; out[i].sev = max(out[i].sev, f.sev); out[i].essential = out[i].essential || isEssential(f); if let t = f.time { out[i].times.append(t) }; if out[i].thumb == nil { out[i].thumb = f.thumb } }
+        else { idx[key] = out.count; out.append(FixItem(id: key, sev: f.sev, title: f.title, detail: f.detail, hints: f.fixes, count: 1, thumb: f.thumb, times: f.time.map { [$0] } ?? [], area: f.area, essential: isEssential(f))) }
     }
     return out.sorted { $0.sev > $1.sev }
 }
@@ -95,7 +95,7 @@ func firstSentence(_ d: String) -> String {
 
 struct JobDetail: View {
     @ObservedObject var job: Job; let store: Store
-    @State private var sheetPlan: FixPlan?; @State private var showCompare = false; @State private var tab = 0; @State private var open: Set<String> = []
+    @State private var sheetPlan: FixPlan?; @State private var showCompare = false; @State private var tab = 0; @State private var showPlus = false; @State private var open: Set<String> = []
     func plan(_ hints: [FixHint]) -> FixPlan { var p = FixPlan(); hints.forEach { p.merge($0) }; return p }
     func toggle(_ id: String) { withAnimation(.easeInOut(duration: 0.16)) { if open.contains(id) { open.remove(id) } else { open.insert(id) } } }
 
@@ -116,7 +116,7 @@ struct JobDetail: View {
             .sheet(isPresented: Binding(get: { sheetPlan != nil }, set: { if !$0 { sheetPlan = nil } })) { FixSheet(job: job, report: r, plan: sheetPlan ?? FixPlan(), store: store) }
             .onChange(of: job.fixProgress != nil) { running in if !running { sheetPlan = nil } }
             .onChange(of: job.hasCorrected) { c in if c && ProcessInfo.processInfo.environment["MOVIEPREFLIGHT_OPENCOMPARE"] != nil { showCompare = true } }
-            .onAppear { if ProcessInfo.processInfo.environment["MOVIEPREFLIGHT_EXPAND"] != nil { open = Set(items.map(\.id) + todo.map { $0.id.uuidString }) } }   // solo per le prove a vista
+            .onAppear { if ProcessInfo.processInfo.environment["MOVIEPREFLIGHT_EXPAND"] != nil { showPlus = true; open = Set(items.map(\.id) + todo.map { $0.id.uuidString }) } }   // solo per le prove a vista
             .onAppear { if ProcessInfo.processInfo.environment["MOVIEPREFLIGHT_SHEET"] != nil { var p = FixPlan(); r.findings.forEach { $0.fixes.forEach { p.merge($0) } }; sheetPlan = p } }   // solo per le prove a vista
         } else {
             VStack(spacing: 12) {
@@ -127,35 +127,43 @@ struct JobDetail: View {
         }
     }
 
-    // MARK: riepilogo: una frase chiara, un pulsante grande, righe compatte
+    // MARK: riepilogo: prima ciò che serve per la sala, poi le migliorie facoltative
     func summary(_ r: Report, _ items: [FixItem], _ todo: [Finding]) -> some View {
-        let safe = items.flatMap { $0.hints }.filter { !isHeavy($0) }
-        let n = items.count + todo.count
+        let eItems = items.filter(\.essential), pItems = items.filter { !$0.essential }
+        let eTodo = todo.filter { isEssential($0) }, pTodo = r.findings.filter { $0.fixes.isEmpty && $0.sev >= .warn && !isEssential($0) }
+        let safeE = eItems.flatMap { $0.hints }.filter { !isHeavy($0) }, safeP = pItems.flatMap { $0.hints }.filter { !isHeavy($0) }
+        let nE = eItems.count + eTodo.count, nP = pItems.count + pTodo.count
         return VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 14) {
-                Image(systemName: n == 0 ? "checkmark.circle.fill" : (r.worst == .error ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")).font(.system(size: 30)).foregroundStyle(n == 0 ? Color.green : r.worst.color)
+                Image(systemName: nE == 0 ? "checkmark.circle.fill" : (r.worst == .error ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")).font(.system(size: 30)).foregroundStyle(nE == 0 ? Color.green : r.worst.color)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(n == 0 ? "Pronto per la sala" : (items.count > 0 ? "\(items.count) \(items.count == 1 ? "cosa" : "cose") da sistemare" : "\(todo.count) \(todo.count == 1 ? "cosa" : "cose") da controllare")).font(.title3.weight(.semibold))
-                    Text(n == 0 ? "Non ho trovato problemi." : (todo.isEmpty || items.isEmpty ? "Ogni voce ha un pulsante: prima di fare qualsiasi cosa ti mostro cosa cambia." : "Più \(todo.count) da controllare a mano.")).font(.callout).foregroundStyle(.secondary)
+                    Text(nE == 0 ? "Pronto per la sala" : (eItems.count > 0 ? "\(nE) \(nE == 1 ? "cosa indispensabile" : "cose indispensabili") da sistemare" : "\(nE) \(nE == 1 ? "cosa" : "cose") da controllare")).font(.title3.weight(.semibold))
+                    Text(nE == 0 ? (nP > 0 ? "Nessun problema indispensabile. Ci sono \(nP) migliorie facoltative." : "Non ho trovato problemi.") : (nP > 0 ? "Più \(nP) migliorie facoltative, qui sotto." : "Prima di fare qualsiasi cosa ti mostro cosa cambia.")).font(.callout).foregroundStyle(.secondary)
                 }
                 Spacer()
-                if !safe.isEmpty && items.filter({ $0.hints.allSatisfy { !isHeavy($0) } }).count >= 2 {
-                    Button { store.confirmFix(job, plan(safe)) { sheetPlan = plan(safe) } } label: { Label("Sistema tutto", systemImage: "wand.and.stars").font(.headline).padding(.horizontal, 6).padding(.vertical, 3) }.buttonStyle(.borderedProminent).controlSize(.large).disabled(job.fixProgress != nil)
+                if eItems.filter({ $0.hints.allSatisfy { !isHeavy($0) } }).count >= 2 {
+                    Button { store.confirmFix(job, plan(safeE)) { sheetPlan = plan(safeE) } } label: { Label("Sistema tutto", systemImage: "wand.and.stars").font(.headline).padding(.horizontal, 6).padding(.vertical, 3) }.buttonStyle(.borderedProminent).controlSize(.large).disabled(job.fixProgress != nil)
                 }
             }
-            if !items.isEmpty { VStack(spacing: 8) { ForEach(items) { it in fixRow(it) } } }
-            if !todo.isEmpty { VStack(alignment: .leading, spacing: 8) {
-                Text("Da controllare a mano").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary).padding(.top, 6)
-                ForEach(todo) { f in manualRow(f) } } }
+            if nE > 0 { VStack(spacing: 8) { ForEach(eItems) { fixRow($0) }; ForEach(eTodo) { manualRow($0) } } }
+            if nP > 0 {
+                Accordion(title: "Migliorie facoltative (\(nP))", expanded: $showPlus, font: .subheadline.weight(.semibold)) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Non servono per andare in sala: rendono il file più compatibile o più bello.").font(.caption).foregroundStyle(.secondary)
+                        if !safeP.isEmpty && pItems.filter({ $0.hints.allSatisfy { !isHeavy($0) } }).count >= 2 { Button("Applica le migliorie sicure") { store.confirmFix(job, plan(safeP)) { sheetPlan = plan(safeP) } }.disabled(job.fixProgress != nil) }
+                        ForEach(pItems) { fixRow($0, plus: true) }; ForEach(pTodo) { manualRow($0, plus: true) }
+                    }
+                }
+            }
         }
     }
-    func fixRow(_ it: FixItem) -> some View {
+    func fixRow(_ it: FixItem, plus: Bool = false) -> some View {
         let (title, ctx) = splitTitle(it.title); let isOpen = open.contains(it.id)
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
                 Button { toggle(it.id) } label: {
                     HStack(spacing: 10) {
-                        Image(systemName: it.sev.symbol).foregroundStyle(it.sev.color).font(.system(size: 17)).frame(width: 22)
+                        Image(systemName: plus ? "sparkles" : it.sev.symbol).foregroundStyle(plus ? Color.blue : it.sev.color).font(.system(size: 17)).frame(width: 22)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(title + (it.count > 1 ? " (+\(it.count - 1))" : "")).font(.callout.weight(.semibold)).multilineTextAlignment(.leading)
                             HStack(spacing: 6) { if !ctx.isEmpty { Text(ctx) }; if let t = it.times.first { Text("a \(hms(t))" + (it.times.count > 1 ? " e altri" : "")).monospacedDigit() } }.font(.caption).foregroundStyle(.secondary)
@@ -173,14 +181,14 @@ struct JobDetail: View {
                 else if let t0 = it.times.first, ["Video", "Sottotitoli", "File"].contains(it.area) { FrameThumb(url: job.url, time: t0) }
             }.padding(.leading, 32) }
         }
-        .padding(.horizontal, 12).padding(.vertical, 10).background(RoundedRectangle(cornerRadius: 10).fill(it.sev.color.opacity(0.07)))
+        .padding(.horizontal, 12).padding(.vertical, 10).background(RoundedRectangle(cornerRadius: 10).fill((plus ? Color.blue : it.sev.color).opacity(0.07)))
     }
-    func manualRow(_ f: Finding) -> some View {
+    func manualRow(_ f: Finding, plus: Bool = false) -> some View {
         let (title, ctx) = splitTitle(f.title); let isOpen = open.contains(f.id.uuidString)
         return VStack(alignment: .leading, spacing: 8) {
             Button { toggle(f.id.uuidString) } label: {
                 HStack(spacing: 10) {
-                    Image(systemName: f.sev.symbol).foregroundStyle(f.sev.color).frame(width: 22)
+                    Image(systemName: plus ? "sparkles" : f.sev.symbol).foregroundStyle(plus ? Color.blue : f.sev.color).frame(width: 22)
                     VStack(alignment: .leading, spacing: 1) { Text(title).font(.callout.weight(.medium)).multilineTextAlignment(.leading)
                         HStack(spacing: 6) { if !ctx.isEmpty { Text(ctx) }; if let t = f.time { Text("a \(hms(t))").monospacedDigit() } }.font(.caption).foregroundStyle(.secondary) }
                     Spacer(minLength: 6); Image(systemName: "chevron.right").font(.system(size: 10, weight: .bold)).foregroundStyle(.tertiary).rotationEffect(.degrees(isOpen ? 90 : 0))

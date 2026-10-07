@@ -117,7 +117,7 @@ struct CompareView: View {
     func pill(_ t: String, _ r: Report) -> some View {
         VStack(alignment: .leading, spacing: 2) { Text(t).font(.caption).foregroundStyle(.secondary)
             HStack(spacing: 6) { Image(systemName: r.worst.symbol); Text(r.verdict).fontWeight(.medium) }.foregroundStyle(r.worst.color).padding(.horizontal, 10).padding(.vertical, 5).background(Capsule().fill(r.worst.color.opacity(0.12)))
-            let c = r.counts; Text("\(c.err) problemi · \(c.warn) attenzioni · \(c.info) note").font(.caption).foregroundStyle(.secondary) }
+            Text("\(r.essential.count) indispensabili · \(r.extras.count) migliorie").font(.caption).foregroundStyle(.secondary) }
     }
     func summary(_ d: ReportDiff) -> some View {
         VStack(alignment: .leading, spacing: 10) {
