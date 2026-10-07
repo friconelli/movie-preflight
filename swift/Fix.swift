@@ -302,7 +302,7 @@ func applyFix(_ url: URL, _ plan: FixPlan, output: URL, progress: @escaping (Dou
         lines.append("Audio \(k + 1) prima: \(lufs(b))"); lines.append("Audio \(k + 1) dopo:  \(lufs(af))")
         // regola di fondo: meglio non toccare l'audio che peggiorarlo
         func reject(_ why: String) -> FixResult { FixResult(ok: false, message: "Correzione audio annullata: \(why). Il file non è stato toccato.", lines: lines) }
-        if af.2 > 0.0 { return reject("avrebbe causato distorsione (picco a \(String(format: "%+.1f", af.2)) dBFS)") }
+        if af.2 > 0.0 && af.2 > b.2 + 0.3 { return reject("avrebbe causato distorsione (il picco passa da \(String(format: "%+.1f", b.2)) a \(String(format: "%+.1f", af.2)) dBFS)") }   // conta il peggioramento, non il valore assoluto: molte tracce hanno già picchi sopra 0
         if plan.toDolby.contains(k), plan.levelGain.isDisjoint(with: [k]), abs(af.0 - b.0) > 1.0 { return reject(String(format: "la conversione avrebbe cambiato il volume (da %.1f a %.1f LUFS)", b.0, af.0)) }
         if plan.levelGain.contains(k), abs(af.0 - levelTarget) > 2.5 { return reject(String(format: "il volume ottenuto (%.1f LUFS) è lontano dall'obiettivo (%.0f)", af.0, levelTarget)) }
         if let bd = beforeDial[k] {
@@ -314,7 +314,7 @@ func applyFix(_ url: URL, _ plan: FixPlan, output: URL, progress: @escaping (Dou
         } else if plan.normalize.contains(k), af.1 > b.1 + 0.5 {
             return reject(String(format: "l'escursione dinamica sarebbe aumentata (da %.1f a %.1f LU)", b.1, af.1))
         }
-        if af.2 > -0.1 { warn = " Attenzione: il picco dopo la correzione è molto alto." }
+        if af.2 > -0.1 && af.2 > b.2 + 0.1 { warn = " Attenzione: il picco dopo la correzione è più alto di prima." }
     }
     // il risultato diventa il file di uscita; l'originale non viene mai toccato (a meno che non si stia correggendo una copia già corretta)
     progress(0.97, "Salvataggio…")

@@ -5,6 +5,8 @@ App Mac (Swift/SwiftUI, come Dolly) che controlla un film prima della proiezione
 ## Interfaccia
 Una scheda per film: locandina, titolo, anno, regia e durata (da Wikidata/Wikipedia, solo dopo il consenso), il verdetto e l'elenco **«Da sistemare»**: ogni problema ha un solo pulsante con l'azione chiara («Ripara gli accenti», «Togli la pubblicità», «Converti in Dolby»…) che mostra prima il riepilogo e chiede conferma; **«Correggi tutto»** raggruppa le correzioni sicure (esclude eliminazioni di tracce e ricodifiche lunghe). Le note e i dati tecnici sono chiusi, le opzioni avanzate stanno in «Correggi a mano…» (menu ⋯).
 
+**Dove sono i problemi:** ogni voce di «Da sistemare» riporta i secondi in cui compare (es. «Nei punti: 0:12 · 0:55») e un fotogramma del film a quel secondo, estratto quando la voce compare; per le scritte nell'immagine è il fotogramma esatto in cui l'OCR le ha lette, con il testo trovato e la parola che ha fatto scattare la segnalazione. Il confronto prima/dopo permette di saltare a quei punti.
+
 ## Dati del film online (opzionale)
 Titolo e anno si ricavano dal nome del file («Titolo (Anno - Regista).mkv» o «Titolo.Anno.1080p…»); con il consenso, l'app interroga **Wikidata** (CC0) e **Wikipedia** (testi CC BY-SA; le locandine sono mostrate solo nell'app, non redistribuite) inviando solo titolo e anno: ne ricava regia, durata attesa, lingua originale, locandina e descrizione. Usi: confronto della durata (film tagliato o incompleto), avviso se manca l'audio in lingua originale, nome del file secondo la convenzione «Titolo (Anno - Regista)» con correzione «Rinomina il file». Da riga di comando: `--online` e `--meta FILE`.
 
@@ -51,7 +53,7 @@ Non inclusi: ingrandimento con IA (Real-ESRGAN è troppo lento per un film inter
 ## Uso
     ./build.sh                       # dist/Movie Preflight.app (+ dist/moviepreflight per la riga di comando)
     dist/moviepreflight --analyze film.mkv # rapporto testuale
-    python3 tests/test_moviepreflight.py   # 69 controlli su film sintetici con difetti noti
+    python3 tests/test_moviepreflight.py   # 70 controlli su film sintetici con difetti noti
 
 Gli strumenti vengono copiati dentro l'app da `tools/bundle_tools.py` (`BUNDLE_FFMPEG=0 ./build.sh` per saltare e usare quelli di /opt/homebrew/bin). Per distribuire l'app pubblicamente tieni conto della licenza di ffmpeg (la build di Homebrew include componenti GPL). Solo Apple Silicon (arm64), macOS 13+. Non modifica mai i file analizzati.
 

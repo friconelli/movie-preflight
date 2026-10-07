@@ -187,6 +187,8 @@ try:
         check("La lingua parlata non corrisponde all'etichetta" in o and "inglese" in o, "audio inglese etichettato italiano rilevato")
         rc, o2 = fix(f3, "--lang", "a0=eng"); check(rc == 0 and tracks(f3, "audio")[0]["tags"]["language"] == "eng", "etichetta di lingua corretta")
     else: print("  (saltato: serve `say` e il modello vocale)")
+    hot = video("picchi.mkv", af="sine=f=300:d=%d,volume=6,alimiter=limit=1:level=0" % D); rc, o = fix(hot, "--dolby", "0")
+    check(rc == 0 and tracks(hot, "audio")[0]["codec_name"] == "ac3", "conversione Dolby accettata anche se l'originale ha già picchi a 0 dB (conta il peggioramento, non il valore assoluto)")
     print("== deinterlacciamento")
     il = os.path.join(T, "interl.mkv")
     ff("-f", "lavfi", "-i", "mandelbrot=s=640x360:r=25", "-f", "lavfi", "-i", "sine=d=200", "-t", "200", "-map", "0:v", "-map", "1:a", "-vf", "interlace=scan=tff", "-c:v", "libx264", "-preset", "ultrafast", "-flags", "+ilme+ildct", "-b:v", "6M", "-c:a", "aac", il)
