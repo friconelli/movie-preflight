@@ -79,57 +79,44 @@ struct FrameThumb: View {
 /// «Ai secondi: 1:20, 5:03, 12:44 …»
 func timesText(_ ts: [Double], more: Int) -> String { "Nei punti: " + ts.prefix(8).map { hms($0) }.joined(separator: " · ") + (ts.count > 8 || more > 0 ? " …" : "") }
 
+/// Titolo breve in italiano semplice: «Caratteri rovinati — sottotitoli 2 (italiano)» → («Caratteri rovinati», «Sottotitoli 2 · italiano»).
+func splitTitle(_ t: String) -> (String, String) {
+    let parts = t.components(separatedBy: " — ")
+    guard parts.count >= 2 else { return (t, "") }
+    var ctx = parts.dropFirst().joined(separator: " — ").replacingOccurrences(of: " (", with: " · ").replacingOccurrences(of: ")", with: "")
+    ctx = ctx.prefix(1).uppercased() + ctx.dropFirst()
+    return (parts[0], ctx)
+}
+/// Prima frase di una spiegazione, accorciata.
+func firstSentence(_ d: String) -> String {
+    let one = d.replacingOccurrences(of: "\n", with: " "); let s = one.components(separatedBy: ". ").first ?? one
+    return s.count > 110 ? String(s.prefix(108)) + "…" : s
+}
+
 struct JobDetail: View {
     @ObservedObject var job: Job; let store: Store
-    @State private var sheetPlan: FixPlan?; @State private var showNotes = false; @State private var showTech = false; @State private var showCompare = false
+    @State private var sheetPlan: FixPlan?; @State private var showCompare = false; @State private var tab = 0; @State private var open: Set<String> = []
     func plan(_ hints: [FixHint]) -> FixPlan { var p = FixPlan(); hints.forEach { p.merge($0) }; return p }
+    func toggle(_ id: String) { withAnimation(.easeInOut(duration: 0.16)) { if open.contains(id) { open.remove(id) } else { open.insert(id) } } }
+
     var body: some View {
         if let r = job.report {
             let items = fixItems(r)
             let todo = r.findings.filter { $0.fixes.isEmpty && $0.sev >= .warn }.sorted { $0.sev > $1.sev }
             let notes = r.findings.filter { $0.fixes.isEmpty && $0.sev == .info }
-            ScrollView { VStack(alignment: .leading, spacing: 22) {
+            ScrollView { VStack(alignment: .leading, spacing: 18) {
                 header(r)
                 if let fr = job.fixResult { FixBanner(result: fr, compare: job.hasCorrected ? { showCompare = true } : nil, reveal: { NSWorkspace.shared.activateFileViewerSelecting([job.url]) }, discard: { store.discardCorrected(job) }) }
                 if job.fixProgress != nil { HStack(spacing: 10) { ProgressView(value: job.fixProgress).frame(width: 220); Text(job.fixStage).font(.callout).foregroundStyle(.secondary) } }
-                if items.isEmpty && todo.isEmpty { HStack(spacing: 8) { Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).font(.title3); Text("Tutto a posto: niente da sistemare.").font(.headline) } }
-                if !items.isEmpty { fixSection(r, items) }
-                if !todo.isEmpty { VStack(alignment: .leading, spacing: 8) {
-                    Text("Da controllare a mano").font(.headline)
-                    ForEach(todo) { f in HStack(alignment: .top, spacing: 10) { Image(systemName: f.sev.symbol).foregroundStyle(f.sev.color).frame(width: 20)
-                        VStack(alignment: .leading, spacing: 2) { Text(f.title).font(.callout.weight(.medium)); if !f.detail.isEmpty { Text(f.detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
-                            if let t = f.thumb, let img = NSImage(contentsOf: t) { Image(nsImage: img).resizable().scaledToFit().frame(maxHeight: 110).cornerRadius(5) } else if let t0 = f.time, ["Video", "Sottotitoli"].contains(f.area) { FrameThumb(url: job.url, time: t0) } }
-                        Spacer(minLength: 0); if let t = f.time { Text(hms(t)).font(.caption.monospacedDigit()).foregroundStyle(.secondary) } } }
-                } }
-                if !notes.isEmpty {
-                    Accordion(title: "Note (\(notes.count))", expanded: $showNotes) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            ForEach(notes) { f in
-                                HStack(alignment: .top, spacing: 8) {
-                                    Image(systemName: "info.circle").foregroundStyle(.secondary).frame(width: 18)
-                                    VStack(alignment: .leading) { Text(f.title).font(.callout); if !f.detail.isEmpty { Text(f.detail).font(.caption).foregroundStyle(.secondary) } }
-                                }
-                            }
-                        }
-                    }
-                }
-                Accordion(title: "Dati tecnici", expanded: $showTech) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        ForEach(r.tech.sorted { $0.order < $1.order }) { sec in
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(sec.title).font(.subheadline.weight(.semibold))
-                                ForEach(sec.rows) { row in
-                                    HStack(alignment: .top) { Text(row.k).foregroundStyle(.secondary).frame(width: 190, alignment: .leading); Text(row.v).textSelection(.enabled) }.font(.callout)
-                                }
-                            }
-                        }
-                    }
-                }
+                HStack(spacing: 4) { ForEach([(0, "Riepilogo"), (1, "Dettagli")], id: \.0) { t in
+                    Button { tab = t.0 } label: { Text(t.1).font(.callout.weight(tab == t.0 ? .semibold : .regular)).padding(.horizontal, 14).padding(.vertical, 5).background(Capsule().fill(tab == t.0 ? Color.secondary.opacity(0.18) : Color.clear)) }.buttonStyle(.plain) } }
+                if tab == 0 { summary(r, items, todo) } else { details(r, notes) }
             }.padding(24).frame(maxWidth: 760, alignment: .leading) }
             .sheet(isPresented: $showCompare) { CompareView(pair: ComparePair(before: job.origURL ?? job.url, beforeReport: job.origReport ?? job.report!, after: job.url, afterReport: job.report!, lines: job.fixLog)) }
             .sheet(isPresented: Binding(get: { sheetPlan != nil }, set: { if !$0 { sheetPlan = nil } })) { FixSheet(job: job, report: r, plan: sheetPlan ?? FixPlan(), store: store) }
             .onChange(of: job.fixProgress != nil) { running in if !running { sheetPlan = nil } }
             .onChange(of: job.hasCorrected) { c in if c && ProcessInfo.processInfo.environment["MOVIEPREFLIGHT_OPENCOMPARE"] != nil { showCompare = true } }
+            .onAppear { if ProcessInfo.processInfo.environment["MOVIEPREFLIGHT_EXPAND"] != nil { open = Set(items.map(\.id) + todo.map { $0.id.uuidString }) } }   // solo per le prove a vista
             .onAppear { if ProcessInfo.processInfo.environment["MOVIEPREFLIGHT_SHEET"] != nil { var p = FixPlan(); r.findings.forEach { $0.fixes.forEach { p.merge($0) } }; sheetPlan = p } }   // solo per le prove a vista
         } else {
             VStack(spacing: 12) {
@@ -139,25 +126,108 @@ struct JobDetail: View {
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
+
+    // MARK: riepilogo: una frase chiara, un pulsante grande, righe compatte
+    func summary(_ r: Report, _ items: [FixItem], _ todo: [Finding]) -> some View {
+        let safe = items.flatMap { $0.hints }.filter { !isHeavy($0) }
+        let n = items.count + todo.count
+        return VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 14) {
+                Image(systemName: n == 0 ? "checkmark.circle.fill" : (r.worst == .error ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")).font(.system(size: 30)).foregroundStyle(n == 0 ? Color.green : r.worst.color)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(n == 0 ? "Pronto per la sala" : (items.count > 0 ? "\(items.count) \(items.count == 1 ? "cosa" : "cose") da sistemare" : "\(todo.count) \(todo.count == 1 ? "cosa" : "cose") da controllare")).font(.title3.weight(.semibold))
+                    Text(n == 0 ? "Non ho trovato problemi." : (todo.isEmpty || items.isEmpty ? "Ogni voce ha un pulsante: prima di fare qualsiasi cosa ti mostro cosa cambia." : "Più \(todo.count) da controllare a mano.")).font(.callout).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if !safe.isEmpty && items.filter({ $0.hints.allSatisfy { !isHeavy($0) } }).count >= 2 {
+                    Button { store.confirmFix(job, plan(safe)) { sheetPlan = plan(safe) } } label: { Label("Sistema tutto", systemImage: "wand.and.stars").font(.headline).padding(.horizontal, 6).padding(.vertical, 3) }.buttonStyle(.borderedProminent).controlSize(.large).disabled(job.fixProgress != nil)
+                }
+            }
+            if !items.isEmpty { VStack(spacing: 8) { ForEach(items) { it in fixRow(it) } } }
+            if !todo.isEmpty { VStack(alignment: .leading, spacing: 8) {
+                Text("Da controllare a mano").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary).padding(.top, 6)
+                ForEach(todo) { f in manualRow(f) } } }
+        }
+    }
+    func fixRow(_ it: FixItem) -> some View {
+        let (title, ctx) = splitTitle(it.title); let isOpen = open.contains(it.id)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Button { toggle(it.id) } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: it.sev.symbol).foregroundStyle(it.sev.color).font(.system(size: 17)).frame(width: 22)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(title + (it.count > 1 ? " (+\(it.count - 1))" : "")).font(.callout.weight(.semibold)).multilineTextAlignment(.leading)
+                            HStack(spacing: 6) { if !ctx.isEmpty { Text(ctx) }; if let t = it.times.first { Text("a \(hms(t))" + (it.times.count > 1 ? " e altri" : "")).monospacedDigit() } }.font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 6)
+                        Image(systemName: "chevron.right").font(.system(size: 10, weight: .bold)).foregroundStyle(.tertiary).rotationEffect(.degrees(isOpen ? 90 : 0))
+                    }.contentShape(Rectangle())
+                }.buttonStyle(.plain)
+                Button(fixLabel(it.hints[0])) { store.confirmFix(job, plan(it.hints)) { sheetPlan = plan(it.hints) } }.disabled(job.fixProgress != nil)
+            }
+            if isOpen { VStack(alignment: .leading, spacing: 6) {
+                if !it.detail.isEmpty { Text(it.detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+                if it.times.count > 1 { Text(timesText(it.times, more: it.count - it.times.count)).font(.caption.monospacedDigit()).foregroundStyle(.secondary) }
+                if let t = it.thumb, let img = NSImage(contentsOf: t) { Image(nsImage: img).resizable().scaledToFit().frame(maxHeight: 120).cornerRadius(5) }
+                else if let t0 = it.times.first, ["Video", "Sottotitoli", "File"].contains(it.area) { FrameThumb(url: job.url, time: t0) }
+            }.padding(.leading, 32) }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10).background(RoundedRectangle(cornerRadius: 10).fill(it.sev.color.opacity(0.07)))
+    }
+    func manualRow(_ f: Finding) -> some View {
+        let (title, ctx) = splitTitle(f.title); let isOpen = open.contains(f.id.uuidString)
+        return VStack(alignment: .leading, spacing: 8) {
+            Button { toggle(f.id.uuidString) } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: f.sev.symbol).foregroundStyle(f.sev.color).frame(width: 22)
+                    VStack(alignment: .leading, spacing: 1) { Text(title).font(.callout.weight(.medium)).multilineTextAlignment(.leading)
+                        HStack(spacing: 6) { if !ctx.isEmpty { Text(ctx) }; if let t = f.time { Text("a \(hms(t))").monospacedDigit() } }.font(.caption).foregroundStyle(.secondary) }
+                    Spacer(minLength: 6); Image(systemName: "chevron.right").font(.system(size: 10, weight: .bold)).foregroundStyle(.tertiary).rotationEffect(.degrees(isOpen ? 90 : 0))
+                }.contentShape(Rectangle())
+            }.buttonStyle(.plain)
+            if isOpen { VStack(alignment: .leading, spacing: 6) {
+                if !f.detail.isEmpty { Text(f.detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+                if let t = f.thumb, let img = NSImage(contentsOf: t) { Image(nsImage: img).resizable().scaledToFit().frame(maxHeight: 120).cornerRadius(5) }
+                else if let t0 = f.time, ["Video", "Sottotitoli"].contains(f.area) { FrameThumb(url: job.url, time: t0) }
+            }.padding(.leading, 32) }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8).background(RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.07)))
+    }
+
+    // MARK: dettagli: note, dati tecnici, rapporto
+    func details(_ r: Report, _ notes: [Finding]) -> some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack(spacing: 10) {
+                Button("Rianalizza") { store.startAnalysis(job) }
+                Button("Correggi a mano…") { sheetPlan = FixPlan() }
+                Button("Copia il rapporto") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(r.text, forType: .string) }
+                Button("Salva il rapporto…") { save(r) }
+            }.disabled(job.fixProgress != nil)
+            if !notes.isEmpty { VStack(alignment: .leading, spacing: 8) { Text("Note").font(.headline)
+                ForEach(notes) { f in HStack(alignment: .top, spacing: 8) { Image(systemName: "info.circle").foregroundStyle(.secondary).frame(width: 18); VStack(alignment: .leading) { Text(f.title).font(.callout); if !f.detail.isEmpty { Text(f.detail).font(.caption).foregroundStyle(.secondary) } } } } } }
+            VStack(alignment: .leading, spacing: 12) { Text("Dati tecnici").font(.headline)
+                ForEach(r.tech.sorted { $0.order < $1.order }) { sec in
+                    VStack(alignment: .leading, spacing: 3) { Text(sec.title).font(.subheadline.weight(.semibold))
+                        ForEach(sec.rows) { row in HStack(alignment: .top) { Text(row.k).foregroundStyle(.secondary).frame(width: 190, alignment: .leading); Text(row.v).textSelection(.enabled) }.font(.callout) } } } }
+        }
+    }
+
     func header(_ r: Report) -> some View {
         HStack(alignment: .top, spacing: 16) {
-            if let m = r.meta, let u = m.posterURL { AsyncImage(url: u) { img in img.resizable().scaledToFit() } placeholder: { Color.secondary.opacity(0.12) }.frame(width: 96, height: 140).cornerRadius(6).shadow(radius: 2) }
-            else { Image(systemName: "film").font(.system(size: 34, weight: .light)).foregroundStyle(.secondary).frame(width: 96, height: 140).background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.10))) }
-            VStack(alignment: .leading, spacing: 5) {
+            if let m = r.meta, let u = m.posterURL { AsyncImage(url: u) { img in img.resizable().scaledToFit() } placeholder: { Color.secondary.opacity(0.12) }.frame(width: 72, height: 105).cornerRadius(6).shadow(radius: 2) }
+            else { Image(systemName: "film").font(.system(size: 26, weight: .light)).foregroundStyle(.secondary).frame(width: 52, height: 52).background(RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.10))) }
+            VStack(alignment: .leading, spacing: 4) {
                 Text(r.meta?.title ?? r.file.deletingPathExtension().lastPathComponent).font(.title2.weight(.semibold)).lineLimit(2)
                 Text(subtitle(r)).font(.callout).foregroundStyle(.secondary).lineLimit(2)
                 if job.hasCorrected, let o = job.origURL { HStack(spacing: 6) { Image(systemName: "doc.on.doc"); Text("Copia corretta di «\(o.lastPathComponent)» — l'originale non è stato toccato") }.font(.caption).foregroundStyle(.secondary) }
-                HStack(spacing: 6) { Image(systemName: r.worst.symbol); Text(r.verdict).fontWeight(.medium) }.font(.callout).foregroundStyle(r.worst.color).padding(.horizontal, 10).padding(.vertical, 4).background(Capsule().fill(r.worst.color.opacity(0.12)))
-                if let s = r.meta?.summary { Text(s).font(.caption).foregroundStyle(.secondary).lineLimit(3).padding(.top, 2) }
+                else if let s = r.meta?.summary { Text(s).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
             }
             Spacer(minLength: 0)
             Menu {
                 Button("Rianalizza") { store.startAnalysis(job) }
                 Button("Correggi a mano…") { sheetPlan = FixPlan() }
                 if job.hasCorrected { Divider(); Button("Confronta prima e dopo…") { showCompare = true }; Button("Mostra nel Finder") { NSWorkspace.shared.activateFileViewerSelecting([job.url]) }; Button("Elimina la copia corretta…") { store.discardCorrected(job) } }
-                Divider()
-                Button("Copia il rapporto") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(r.text, forType: .string) }
-                Button("Salva il rapporto…") { save(r) }
                 Divider()
                 Button("Dati del film online…") { store.askOnline(force: true) }
             } label: { Image(systemName: "ellipsis.circle").font(.title3) }.menuStyle(.borderlessButton).frame(width: 34).disabled(job.fixProgress != nil)
@@ -171,28 +241,6 @@ struct JobDetail: View {
         return p.joined(separator: " · ")
     }
     func hmLabel(_ s: Double) -> String { let m = Int(s / 60); return m >= 60 ? "\(m / 60) h \(m % 60) min" : "\(m) min" }
-    func fixSection(_ r: Report, _ items: [FixItem]) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack { Text("Da sistemare").font(.headline); Spacer()
-                let safe = items.flatMap { $0.hints }.filter { !isHeavy($0) }
-                if items.filter({ $0.hints.allSatisfy { !isHeavy($0) } }).count >= 2 { Button { store.confirmFix(job, plan(safe)) { sheetPlan = plan(safe) } } label: { Label("Correggi tutto", systemImage: "wand.and.stars") }.buttonStyle(.borderedProminent).disabled(job.fixProgress != nil) } }
-            ForEach(items) { it in
-                HStack(alignment: .top, spacing: 12) {
-                    Image(systemName: it.sev.symbol).foregroundStyle(it.sev.color).font(.system(size: 18)).frame(width: 22)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(it.title + (it.count > 1 ? " (+\(it.count - 1))" : "")).font(.callout.weight(.semibold))
-                        if !it.detail.isEmpty { Text(it.detail).font(.caption).foregroundStyle(.secondary).lineLimit(3).fixedSize(horizontal: false, vertical: true) }
-                        if !it.times.isEmpty { Text(timesText(it.times, more: it.count - it.times.count)).font(.caption.monospacedDigit()).foregroundStyle(.secondary).padding(.top, 1) }
-                        if let t = it.thumb, let img = NSImage(contentsOf: t) { Image(nsImage: img).resizable().scaledToFit().frame(maxHeight: 110).cornerRadius(5).padding(.top, 2) }
-                        else if let t0 = it.times.first, ["Video", "Sottotitoli", "File"].contains(it.area) { FrameThumb(url: job.url, time: t0).padding(.top, 2) }
-                    }
-                    Spacer(minLength: 8)
-                    Button(fixLabel(it.hints[0])) { store.confirmFix(job, plan(it.hints)) { sheetPlan = plan(it.hints) } }.disabled(job.fixProgress != nil)
-                }
-                .padding(12).background(RoundedRectangle(cornerRadius: 10).fill(it.sev.color.opacity(0.08))).overlay(RoundedRectangle(cornerRadius: 10).stroke(it.sev.color.opacity(0.25)))
-            }
-        }
-    }
     func save(_ r: Report) {
         let p = NSSavePanel(); p.nameFieldStringValue = r.file.deletingPathExtension().lastPathComponent + " — preflight.txt"; p.allowedContentTypes = [.plainText]
         if p.runModal() == .OK, let u = p.url { try? r.text.write(to: u, atomically: true, encoding: .utf8) }

@@ -146,8 +146,7 @@ struct ContentView: View {
         Group {
             if store.jobs.isEmpty { DropHint(store: store) }
             else { HStack(spacing: 0) {
-                List(store.jobs, selection: $store.selection) { j in JobRow(job: j).tag(j.id) }.frame(width: 250).listStyle(.sidebar)
-                Divider()
+                if store.jobs.count > 1 { List(store.jobs, selection: $store.selection) { j in JobRow(job: j).tag(j.id) }.frame(width: 250).listStyle(.sidebar); Divider() }   // la barra laterale serve solo con più film
                 if let j = store.jobs.first(where: { $0.id == store.selection }) { JobDetail(job: j, store: store).id(j.id) } else { Spacer() }
             } }
         }
